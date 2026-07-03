@@ -34,7 +34,9 @@ struct QuickAccessOverlayView: View {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(.white.opacity(isHovering ? 0.24 : 0.14), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 12)
+        .shadow(color: .black.opacity(0.10), radius: 34, x: 0, y: 22)
+        .shadow(color: .black.opacity(0.16), radius: 18, x: 0, y: 12)
+        .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 2)
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.14)) {
                 isHovering = hovering

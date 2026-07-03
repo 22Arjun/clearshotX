@@ -59,7 +59,7 @@ final class QuickAccessOverlayManager {
 
         let panel = panel ?? makePanel()
         self.panel = panel
-        panel.contentView = NSHostingView(rootView: overlayView)
+        panel.contentView = makeRoundedHostingView(rootView: overlayView)
 
         let finalFrame = overlayFrame(for: capture)
         let startFrame = finalFrame.offsetBy(dx: 0, dy: -slideDistance)
@@ -85,6 +85,8 @@ final class QuickAccessOverlayManager {
             defer: false
         )
         panel.backgroundColor = .clear
+        panel.contentView?.wantsLayer = true
+        panel.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
@@ -94,6 +96,16 @@ final class QuickAccessOverlayManager {
         panel.isReleasedWhenClosed = false
         panel.level = .floating
         return panel
+    }
+
+    private func makeRoundedHostingView<Content: View>(rootView: Content) -> NSView {
+        let hostingView = TransparentHostingView(rootView: rootView)
+        hostingView.frame = NSRect(origin: .zero, size: panelSize)
+        hostingView.autoresizingMask = [.width, .height]
+        hostingView.layer?.cornerRadius = 12
+        hostingView.layer?.cornerCurve = .continuous
+        hostingView.layer?.masksToBounds = true
+        return hostingView
     }
 
     private func overlayFrame(for capture: CaptureResult) -> NSRect {
@@ -223,7 +235,7 @@ final class QuickAccessOverlayManager {
         panel.isReleasedWhenClosed = false
         panel.level = .floating
 
-        panel.contentView = NSHostingView(
+        panel.contentView = TransparentHostingView(
             rootView: PinnedCaptureView(capture: capture) { [weak self, weak panel] in
                 guard let panel else {
                     return
@@ -281,6 +293,46 @@ private final class QuickAccessPanel: NSPanel {
 
     override var canBecomeMain: Bool {
         false
+    }
+}
+
+private final class TransparentHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool {
+        false
+    }
+
+    required init(rootView: Content) {
+        super.init(rootView: rootView)
+        setupTransparency()
+    }
+
+    @available(*, unavailable)
+    required init(rootView: Content, ignoresSafeArea: Bool) {
+        fatalError("init(rootView:ignoresSafeArea:) has not been implemented")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        setupTransparency()
+        window?.backgroundColor = .clear
+        window?.isOpaque = false
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.clear.setFill()
+        dirtyRect.fill()
+        super.draw(dirtyRect)
+    }
+
+    private func setupTransparency() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.isOpaque = false
     }
 }
 
