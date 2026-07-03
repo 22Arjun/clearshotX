@@ -116,7 +116,8 @@ final class ScreenCaptureService {
             image: image,
             fileURL: fileURL,
             pixelWidth: cgImage.width,
-            pixelHeight: cgImage.height
+            pixelHeight: cgImage.height,
+            screenFrame: display.frame
         )
     }
 
@@ -176,7 +177,8 @@ final class ScreenCaptureService {
             image: image,
             fileURL: fileURL,
             pixelWidth: cgImage.width,
-            pixelHeight: cgImage.height
+            pixelHeight: cgImage.height,
+            screenFrame: display.frame
         )
     }
 
@@ -210,6 +212,8 @@ final class ScreenCaptureService {
         }
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
+        let content = try await SCShareableContent.current
+        let display = display(containing: window.frame, from: content.displays)
         let configuration = SCStreamConfiguration()
         let pixelSize = outputPixelSize(for: filter, fallbackRect: window.frame)
         configuration.width = pixelSize.width
@@ -232,7 +236,8 @@ final class ScreenCaptureService {
             image: image,
             fileURL: fileURL,
             pixelWidth: cgImage.width,
-            pixelHeight: cgImage.height
+            pixelHeight: cgImage.height,
+            screenFrame: display?.frame ?? NSScreen.main?.frame ?? .zero
         )
     }
 

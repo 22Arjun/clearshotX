@@ -15,6 +15,7 @@ final class AppShellViewModel: ObservableObject {
     private let screenCaptureService: ScreenCaptureService
     private let clipboardService: ClipboardService
     private let previewWindowManager: PreviewWindowManager
+    private let quickAccessOverlayManager: QuickAccessOverlayManager
     private let regionSelectionManager: RegionSelectionManager
     private let windowSelectionManager: WindowSelectionManager
     private let alertPresenter: AlertPresenter
@@ -23,6 +24,7 @@ final class AppShellViewModel: ObservableObject {
         screenCaptureService: ScreenCaptureService? = nil,
         clipboardService: ClipboardService? = nil,
         previewWindowManager: PreviewWindowManager? = nil,
+        quickAccessOverlayManager: QuickAccessOverlayManager? = nil,
         regionSelectionManager: RegionSelectionManager? = nil,
         windowSelectionManager: WindowSelectionManager? = nil,
         alertPresenter: AlertPresenter? = nil
@@ -30,6 +32,7 @@ final class AppShellViewModel: ObservableObject {
         self.screenCaptureService = screenCaptureService ?? ScreenCaptureService()
         self.clipboardService = clipboardService ?? ClipboardService()
         self.previewWindowManager = previewWindowManager ?? PreviewWindowManager()
+        self.quickAccessOverlayManager = quickAccessOverlayManager ?? QuickAccessOverlayManager()
         self.regionSelectionManager = regionSelectionManager ?? RegionSelectionManager()
         self.windowSelectionManager = windowSelectionManager ?? WindowSelectionManager()
         self.alertPresenter = alertPresenter ?? AlertPresenter()
@@ -49,7 +52,7 @@ final class AppShellViewModel: ObservableObject {
 
             do {
                 let capture = try await screenCaptureService.captureFullScreen()
-                previewWindowManager.showPreview(for: capture, clipboardService: clipboardService)
+                showQuickAccessOverlay(for: capture)
             } catch {
                 handleCaptureError(error)
             }
@@ -74,7 +77,7 @@ final class AppShellViewModel: ObservableObject {
 
             do {
                 let capture = try await screenCaptureService.captureRegion(region)
-                previewWindowManager.showPreview(for: capture, clipboardService: clipboardService)
+                showQuickAccessOverlay(for: capture)
             } catch {
                 handleCaptureError(error)
             }
@@ -101,7 +104,7 @@ final class AppShellViewModel: ObservableObject {
                 }
 
                 let capture = try await screenCaptureService.captureWindow(window)
-                previewWindowManager.showPreview(for: capture, clipboardService: clipboardService)
+                showQuickAccessOverlay(for: capture)
             } catch {
                 handleCaptureError(error)
             }
@@ -140,6 +143,14 @@ final class AppShellViewModel: ObservableObject {
         alertPresenter.showError(
             title: "Screen Capture Failed",
             message: message
+        )
+    }
+
+    private func showQuickAccessOverlay(for capture: CaptureResult) {
+        quickAccessOverlayManager.show(
+            capture: capture,
+            clipboardService: clipboardService,
+            previewWindowManager: previewWindowManager
         )
     }
 }

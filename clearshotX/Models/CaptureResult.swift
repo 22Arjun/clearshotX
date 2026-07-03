@@ -13,4 +13,5 @@ struct CaptureResult {
     let fileURL: URL
     let pixelWidth: Int
     let pixelHeight: Int
+    let screenFrame: CGRect
 }
