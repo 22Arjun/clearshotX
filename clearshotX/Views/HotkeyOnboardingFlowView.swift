@@ -25,6 +25,8 @@ struct HotkeyOnboardingFlowView: View {
                     defaultScreenshotToolDecision
                 case .systemSettingsInstructions:
                     systemSettingsInstructions
+                case .screenRecordingPermission:
+                    screenRecordingPermissionScreen
                 case .nextOnboardingScreen:
                     readyScreen
                 }
@@ -59,8 +61,9 @@ struct HotkeyOnboardingFlowView: View {
             }
             .accessibilityLabel("Step \(viewModel.currentStepIndex + 1) of \(viewModel.stepCount)")
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 22)
+        .padding(.leading, 86)
+        .padding(.trailing, 28)
+        .padding(.top, 34)
         .padding(.bottom, 10)
     }
 
@@ -70,6 +73,7 @@ struct HotkeyOnboardingFlowView: View {
             title: "Screenshots, without the cleanup",
             subtitle: "ClearshotX lives in your menu bar, captures fast, and keeps the next action close the moment you take a shot.",
             inlineMessage: nil,
+            shortcutStatuses: [],
             footer: {
                 OnboardingFooter {
                     Button {
@@ -90,6 +94,7 @@ struct HotkeyOnboardingFlowView: View {
             title: "Capture what matters",
             subtitle: "Grab the full screen or drag a region. ClearshotX brings up a lightweight control surface right after capture.",
             inlineMessage: nil,
+            shortcutStatuses: [],
             footer: {
                 OnboardingFooter {
                     Button {
@@ -110,6 +115,7 @@ struct HotkeyOnboardingFlowView: View {
             title: "Use familiar Mac shortcuts?",
             subtitle: "ClearshotX can take over ⇧⌘3 and ⇧⌘4, or keep separate shortcuts so macOS stays unchanged.",
             inlineMessage: nil,
+            shortcutStatuses: [],
             footer: {
                 OnboardingFooter {
                     Button {
@@ -139,6 +145,7 @@ struct HotkeyOnboardingFlowView: View {
             title: "One quick step in System Settings",
             subtitle: "Turn off all five rows under Keyboard Shortcuts > Screenshots, then return here.",
             inlineMessage: viewModel.inlineMessage,
+            shortcutStatuses: viewModel.screenshotShortcutStatuses,
             footer: {
                 OnboardingFooter {
                     Button {
@@ -176,12 +183,68 @@ struct HotkeyOnboardingFlowView: View {
         )
     }
 
+    private var screenRecordingPermissionScreen: some View {
+        OnboardingScreenLayout(
+            visual: screenRecordingPermissionVisual,
+            title: "Screen Recording Access",
+            subtitle: "macOS requires this permission before ClearshotX can capture screenshots. ClearshotX only captures when you ask it to.",
+            inlineMessage: viewModel.inlineMessage,
+            shortcutStatuses: [],
+            footer: {
+                OnboardingFooter {
+                    if viewModel.screenRecordingPermissionState == .granted {
+                        Button {
+                            viewModel.confirmScreenRecordingPermission()
+                        } label: {
+                            Label("Continue", systemImage: "arrow.right")
+                        }
+                        .buttonStyle(OnboardingActionButtonStyle(kind: .primary, width: 132))
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(viewModel.isWorking)
+                    } else {
+                        Button {
+                            viewModel.requestScreenRecordingPermission()
+                        } label: {
+                            Label("Allow Access", systemImage: "lock.open")
+                        }
+                        .buttonStyle(OnboardingActionButtonStyle(kind: .secondary, width: 138))
+                        .disabled(viewModel.isWorking)
+
+                        Button {
+                            viewModel.openScreenRecordingSettings()
+                        } label: {
+                            Label("Open Settings", systemImage: "gearshape")
+                        }
+                        .buttonStyle(OnboardingActionButtonStyle(kind: .secondary, width: 148))
+                        .disabled(viewModel.isWorking)
+
+                        Button {
+                            viewModel.confirmScreenRecordingPermission()
+                        } label: {
+                            if viewModel.isWorking {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 18, height: 18)
+                            } else {
+                                Label("I Enabled It", systemImage: "checkmark")
+                            }
+                        }
+                        .buttonStyle(OnboardingActionButtonStyle(kind: .primary, width: 142))
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(viewModel.isWorking)
+                    }
+                }
+            }
+        )
+    }
+
     private var readyScreen: some View {
         OnboardingScreenLayout(
             visual: readyVisual,
             title: viewModel.nextScreenTitle,
             subtitle: viewModel.nextScreenSubtitle,
             inlineMessage: nil,
+            shortcutStatuses: [],
             footer: {
                 OnboardingFooter {
                     Button {
@@ -307,6 +370,10 @@ struct HotkeyOnboardingFlowView: View {
         SystemSettingsInstructionVisual()
     }
 
+    private var screenRecordingPermissionVisual: some View {
+        ScreenRecordingPermissionVisual(state: viewModel.screenRecordingPermissionState)
+    }
+
     private var readyVisual: some View {
         ZStack {
             Circle()
@@ -345,6 +412,7 @@ private struct OnboardingScreenLayout<Visual: View, Footer: View>: View {
     let title: String
     let subtitle: String
     let inlineMessage: String?
+    let shortcutStatuses: [MacScreenshotShortcutStatus]
     let footer: Footer
 
     init(
@@ -352,55 +420,156 @@ private struct OnboardingScreenLayout<Visual: View, Footer: View>: View {
         title: String,
         subtitle: String,
         inlineMessage: String?,
+        shortcutStatuses: [MacScreenshotShortcutStatus],
         @ViewBuilder footer: () -> Footer
     ) {
         self.visual = visual
         self.title = title
         self.subtitle = subtitle
         self.inlineMessage = inlineMessage
+        self.shortcutStatuses = shortcutStatuses
         self.footer = footer()
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 24)
+            ScrollView(.vertical) {
+                VStack(spacing: 0) {
+                    visual
+                        .padding(.top, 14)
 
-            visual
-                .padding(.top, 10)
+                    Text(title)
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundStyle(Color(nsColor: .labelColor))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 22)
+                        .padding(.horizontal, 58)
 
-            Text(title)
-                .font(.system(size: 32, weight: .bold))
-                .foregroundStyle(Color(nsColor: .labelColor))
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 28)
-                .padding(.horizontal, 58)
+                    Text(subtitle)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 12)
+                        .padding(.horizontal, 92)
 
-            Text(subtitle)
-                .font(.system(size: 16))
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                .multilineTextAlignment(.center)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 14)
-                .padding(.horizontal, 92)
-
-            if let inlineMessage {
-                Text(inlineMessage)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(nsColor: .systemOrange))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 16)
-                    .padding(.horizontal, 94)
+                    if !shortcutStatuses.isEmpty {
+                        ScreenshotShortcutStatusPanel(
+                            message: inlineMessage,
+                            statuses: shortcutStatuses
+                        )
+                        .padding(.top, 14)
+                        .padding(.horizontal, 88)
+                    } else if let inlineMessage {
+                        InlineOnboardingMessage(message: inlineMessage)
+                            .padding(.top, 14)
+                            .padding(.horizontal, 92)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 18)
             }
-
-            Spacer(minLength: 18)
+            .scrollIndicators(.hidden)
 
             footer
         }
+    }
+}
+
+private struct InlineOnboardingMessage: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color(nsColor: .systemOrange))
+            .multilineTextAlignment(.center)
+            .lineSpacing(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: 560)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .systemOrange).opacity(0.10))
+            )
+    }
+}
+
+private struct ScreenshotShortcutStatusPanel: View {
+    let message: String?
+    let statuses: [MacScreenshotShortcutStatus]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let message {
+                Text(message)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .systemOrange))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(statuses.enumerated()), id: \.element.id) { index, status in
+                    ScreenshotShortcutStatusRow(status: status)
+
+                    if index < statuses.count - 1 {
+                        Divider()
+                            .padding(.leading, 34)
+                    }
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.78))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.62), lineWidth: 1)
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: 560)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .systemOrange).opacity(0.08))
+        )
+    }
+}
+
+private struct ScreenshotShortcutStatusRow: View {
+    let status: MacScreenshotShortcutStatus
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: status.isEnabled ? "checkmark.square.fill" : "square")
+                .font(.system(size: 16, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(status.isEnabled ? Color(nsColor: .systemBlue) : Color(nsColor: .tertiaryLabelColor))
+                .frame(width: 22, height: 24)
+
+            Text(status.systemShortcutName)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color(nsColor: .labelColor))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 10)
+
+            Text(status.shortcutDisplayName)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(minHeight: 34)
     }
 }
 
@@ -513,6 +682,96 @@ private struct ShortcutOptionVisual: View {
         }
         .padding(18)
         .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct ScreenRecordingPermissionVisual: View {
+    let state: ScreenRecordingPermissionState
+
+    private var isGranted: Bool {
+        state == .granted
+    }
+
+    private var statusText: String {
+        isGranted ? "Permission enabled" : "Permission needed"
+    }
+
+    private var statusIcon: String {
+        isGranted ? "checkmark.shield.fill" : "lock.shield.fill"
+    }
+
+    private var statusColor: NSColor {
+        isGranted ? .systemGreen : .systemBlue
+    }
+
+    var body: some View {
+        ZStack {
+            VisualPanel(width: 392, height: 278)
+
+            VStack(spacing: 13) {
+                ZStack {
+                    Circle()
+                        .fill(Color(nsColor: statusColor).opacity(0.13))
+                        .frame(width: 72, height: 72)
+
+                    Circle()
+                        .stroke(Color(nsColor: statusColor).opacity(0.28), lineWidth: 1)
+                        .frame(width: 90, height: 90)
+
+                    Image(systemName: statusIcon)
+                        .font(.system(size: 38, weight: .semibold))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Color(nsColor: statusColor))
+                }
+
+                Text(statusText)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+
+                VStack(spacing: 0) {
+                    PermissionTrustRow(icon: "cursorarrow.click.2", title: "You stay in control", detail: "Capture starts from your shortcut or menu action.")
+                    Divider().padding(.leading, 40)
+                    PermissionTrustRow(icon: "eye.slash", title: "No background watching", detail: "ClearshotX is idle until you trigger a screenshot.")
+                    Divider().padding(.leading, 40)
+                    PermissionTrustRow(icon: "macwindow", title: "Mac protected", detail: "macOS keeps this permission visible in System Settings.")
+                }
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.72), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .padding(18)
+            .frame(width: 392, height: 278)
+        }
+        .frame(width: 420, height: 300)
+    }
+}
+
+private struct PermissionTrustRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color(nsColor: .systemBlue))
+                .frame(width: 28, height: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: .labelColor))
+
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.88)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 34)
     }
 }
 

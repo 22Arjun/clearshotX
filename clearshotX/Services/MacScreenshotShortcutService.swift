@@ -15,6 +15,13 @@ struct MacScreenshotShortcutConflict: Identifiable {
     let systemShortcutName: String
 }
 
+struct MacScreenshotShortcutStatus: Identifiable {
+    let id: String
+    let systemShortcutName: String
+    let shortcutDisplayName: String
+    let isEnabled: Bool
+}
+
 enum MacScreenshotShortcutState {
     case allDisabled
     case active(conflicts: [MacScreenshotShortcutConflict])
@@ -150,6 +157,33 @@ final class MacScreenshotShortcutService {
             return fallbackConflicts()
         case .active(let conflicts):
             return conflicts
+        }
+    }
+
+    func screenshotShortcutStatuses(for state: MacScreenshotShortcutState) -> [MacScreenshotShortcutStatus]? {
+        switch state {
+        case .allDisabled:
+            return Self.shortcuts.map { shortcut in
+                MacScreenshotShortcutStatus(
+                    id: shortcut.symbolicHotkeyID,
+                    systemShortcutName: shortcut.name,
+                    shortcutDisplayName: shortcut.hotkey.displayName,
+                    isEnabled: false
+                )
+            }
+        case .active(let conflicts):
+            let enabledShortcutIDs = Set(conflicts.map(\.id))
+
+            return Self.shortcuts.map { shortcut in
+                MacScreenshotShortcutStatus(
+                    id: shortcut.symbolicHotkeyID,
+                    systemShortcutName: shortcut.name,
+                    shortcutDisplayName: shortcut.hotkey.displayName,
+                    isEnabled: enabledShortcutIDs.contains(shortcut.symbolicHotkeyID)
+                )
+            }
+        case .unknown:
+            return nil
         }
     }
 

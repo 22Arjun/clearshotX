@@ -19,6 +19,7 @@ enum HotkeyOnboardingScreen: String {
     case capturePreview
     case defaultScreenshotToolDecision
     case systemSettingsInstructions
+    case screenRecordingPermission
     case nextOnboardingScreen
 }
 
@@ -28,10 +29,13 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
 
     @Published private(set) var screen: HotkeyOnboardingScreen
     @Published private(set) var inlineMessage: String?
+    @Published private(set) var screenshotShortcutStatuses: [MacScreenshotShortcutStatus] = []
+    @Published private(set) var screenRecordingPermissionState: ScreenRecordingPermissionState = .notGranted
     @Published private(set) var isWorking = false
 
     private let context: HotkeyOnboardingFlowContext
     private let hotkeyConflictResolutionManager: HotkeyConflictResolutionManager
+    private let screenRecordingPermissionService: ScreenRecordingPermissionService
     private let captureFullScreen: Handler
     private let captureRegion: Handler
     private let onHotkeyModeChanged: () -> Void
@@ -44,6 +48,7 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
     init(
         context: HotkeyOnboardingFlowContext,
         hotkeyConflictResolutionManager: HotkeyConflictResolutionManager,
+        screenRecordingPermissionService: ScreenRecordingPermissionService? = nil,
         captureFullScreen: @escaping Handler,
         captureRegion: @escaping Handler,
         onHotkeyModeChanged: @escaping () -> Void,
@@ -52,6 +57,7 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
         self.context = context
         self.screen = context == .firstRun ? .welcome : .defaultScreenshotToolDecision
         self.hotkeyConflictResolutionManager = hotkeyConflictResolutionManager
+        self.screenRecordingPermissionService = screenRecordingPermissionService ?? ScreenRecordingPermissionService()
         self.captureFullScreen = captureFullScreen
         self.captureRegion = captureRegion
         self.onHotkeyModeChanged = onHotkeyModeChanged
@@ -61,7 +67,7 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
     var visibleScreens: [HotkeyOnboardingScreen] {
         switch context {
         case .firstRun:
-            [.welcome, .capturePreview, .defaultScreenshotToolDecision, .nextOnboardingScreen]
+            [.welcome, .capturePreview, .defaultScreenshotToolDecision, .screenRecordingPermission, .nextOnboardingScreen]
         case .settings:
             [.defaultScreenshotToolDecision, .nextOnboardingScreen]
         }
@@ -132,10 +138,11 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
 
             await hotkeyConflictResolutionManager.registerIndependentDefaultHotkeys(
                 captureFullScreen: captureFullScreen,
-                captureRegion: captureRegion
+                captureRegion: captureRegion,
+                completeOnboarding: context == .settings
             )
             onHotkeyModeChanged()
-            transition(to: .nextOnboardingScreen)
+            transitionAfterHotkeySetup()
         }
     }
 
@@ -146,6 +153,7 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
 
         logger.info("User selected macOS default screenshot shortcuts")
         inlineMessage = nil
+        screenshotShortcutStatuses = []
         isWorking = true
 
         Task { @MainActor in
@@ -164,6 +172,7 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
 
     func openSystemSettings() {
         inlineMessage = nil
+        screenshotShortcutStatuses = []
 
         guard hotkeyConflictResolutionManager.openKeyboardShortcutSettings() else {
             inlineMessage = "ClearshotX could not open System Settings automatically. Open Keyboard Shortcuts, then Screenshots, and turn off all five rows."
@@ -175,6 +184,7 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
 
     func returnToDefaultShortcutDecision() {
         inlineMessage = nil
+        screenshotShortcutStatuses = []
         hotkeyConflictResolutionManager.cancelPendingDefaultShortcutSetup()
         transition(to: .defaultScreenshotToolDecision)
     }
@@ -185,6 +195,7 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
         }
 
         inlineMessage = nil
+        screenshotShortcutStatuses = []
         isWorking = true
 
         Task { @MainActor in
@@ -194,22 +205,105 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
 
             let result = await hotkeyConflictResolutionManager.confirmDefaultShortcutSetup(
                 captureFullScreen: captureFullScreen,
-                captureRegion: captureRegion
+                captureRegion: captureRegion,
+                completeOnboarding: context == .settings
             )
             onHotkeyModeChanged()
 
             switch result {
             case .ready:
-                transition(to: .nextOnboardingScreen)
-            case .stillEnabled(let message):
+                screenshotShortcutStatuses = []
+                transitionAfterHotkeySetup()
+            case .stillEnabled(let message, let shortcutStatuses):
                 logger.info("User confirmation did not resolve the shortcut conflict")
                 inlineMessage = message
+                screenshotShortcutStatuses = shortcutStatuses
             }
+        }
+    }
+
+    func refreshScreenRecordingPermission() {
+        guard !isWorking else {
+            return
+        }
+
+        logger.info("Refreshing Screen Recording permission state")
+        inlineMessage = nil
+        isWorking = true
+
+        Task { @MainActor in
+            defer {
+                isWorking = false
+            }
+
+            screenRecordingPermissionState = await screenRecordingPermissionService.currentState()
+        }
+    }
+
+    func requestScreenRecordingPermission() {
+        guard !isWorking else {
+            return
+        }
+
+        logger.info("User requested Screen Recording permission from onboarding")
+        inlineMessage = nil
+        isWorking = true
+
+        Task { @MainActor in
+            defer {
+                isWorking = false
+            }
+
+            screenRecordingPermissionState = await screenRecordingPermissionService.requestPermission()
+
+            if screenRecordingPermissionState != .granted {
+                inlineMessage = "macOS has not granted Screen Recording yet. Open System Settings, enable ClearshotX, then come back here."
+            }
+        }
+    }
+
+    func openScreenRecordingSettings() {
+        inlineMessage = nil
+
+        guard screenRecordingPermissionService.openSystemSettings() else {
+            inlineMessage = "ClearshotX could not open System Settings automatically. Open Privacy & Security > Screen & System Audio Recording, then enable ClearshotX."
+            return
+        }
+
+        logger.info("Screen Recording settings open request was accepted")
+    }
+
+    func confirmScreenRecordingPermission() {
+        guard !isWorking else {
+            return
+        }
+
+        logger.info("User confirmed Screen Recording permission should be enabled")
+        inlineMessage = nil
+        isWorking = true
+
+        Task { @MainActor in
+            defer {
+                isWorking = false
+            }
+
+            screenRecordingPermissionState = await screenRecordingPermissionService.currentState()
+
+            guard screenRecordingPermissionState == .granted else {
+                logger.info("Screen Recording permission is still not active")
+                inlineMessage = "ClearshotX still cannot see Screen Recording permission. If you already enabled it, quit and reopen ClearshotX so macOS applies the change."
+                return
+            }
+
+            transition(to: .nextOnboardingScreen)
         }
     }
 
     func finish() {
         logger.info("Hotkey onboarding flow finished")
+        if context == .firstRun {
+            hotkeyConflictResolutionManager.completeOnboardingFlow()
+        }
         onFinished()
     }
 
@@ -217,5 +311,20 @@ final class HotkeyOnboardingFlowViewModel: ObservableObject {
         let previousScreen = screen
         screen = nextScreen
         logger.info("Hotkey onboarding transition \(previousScreen.rawValue, privacy: .public) -> \(nextScreen.rawValue, privacy: .public)")
+
+        if nextScreen == .screenRecordingPermission {
+            Task { @MainActor in
+                screenRecordingPermissionState = await screenRecordingPermissionService.currentState()
+            }
+        }
+    }
+
+    private func transitionAfterHotkeySetup() {
+        switch context {
+        case .firstRun:
+            transition(to: .screenRecordingPermission)
+        case .settings:
+            transition(to: .nextOnboardingScreen)
+        }
     }
 }

@@ -15,7 +15,7 @@ enum HotkeyOnboardingLaunchPresentation {
 
 enum HotkeyDefaultShortcutConfirmationResult {
     case ready
-    case stillEnabled(message: String)
+    case stillEnabled(message: String, shortcutStatuses: [MacScreenshotShortcutStatus])
 }
 
 @MainActor
@@ -124,7 +124,8 @@ final class HotkeyConflictResolutionManager {
 
     func registerIndependentDefaultHotkeys(
         captureFullScreen: @escaping Handler,
-        captureRegion: @escaping Handler
+        captureRegion: @escaping Handler,
+        completeOnboarding: Bool = true
     ) async {
         logger.info("User declined default screenshot shortcuts; registering independent hotkeys")
         UserDefaults.standard.removeObject(forKey: UserDefaultsKey.defaultShortcutSetupPending)
@@ -132,7 +133,8 @@ final class HotkeyConflictResolutionManager {
         _ = registerIndependentHotkeys(
             captureFullScreen: captureFullScreen,
             captureRegion: captureRegion,
-            rememberChoice: true
+            rememberChoice: true,
+            completeOnboarding: completeOnboarding
         )
     }
 
@@ -152,7 +154,8 @@ final class HotkeyConflictResolutionManager {
 
     func confirmDefaultShortcutSetup(
         captureFullScreen: @escaping Handler,
-        captureRegion: @escaping Handler
+        captureRegion: @escaping Handler,
+        completeOnboarding: Bool = true
     ) async -> HotkeyDefaultShortcutConfirmationResult {
         logger.info("Re-checking macOS screenshot shortcut state after user confirmation")
 
@@ -165,17 +168,21 @@ final class HotkeyConflictResolutionManager {
                 captureRegion: captureRegion,
                 rememberChoice: false
             )
-            return .stillEnabled(message: confirmationFailureMessage(for: state))
+            return .stillEnabled(
+                message: confirmationFailureMessage(for: state),
+                shortcutStatuses: screenshotShortcutStatuses(for: state)
+            )
         }
 
         let preferredHotkeysRegistered = registerPreferredHotkeys(
             captureFullScreen: captureFullScreen,
-            captureRegion: captureRegion
+            captureRegion: captureRegion,
+            completeOnboarding: completeOnboarding
         )
 
         if !preferredHotkeysRegistered {
             logger.warning("macOS screenshot shortcuts are disabled, but preferred hotkey registration still failed; allowing onboarding to continue and retrying preferred registration on next launch")
-            rememberSetup(mode: .preferred)
+            rememberSetup(mode: .preferred, completeOnboarding: completeOnboarding)
         }
 
         logger.info("Default screenshot shortcut setup completed")
@@ -185,6 +192,14 @@ final class HotkeyConflictResolutionManager {
     func cancelPendingDefaultShortcutSetup() {
         logger.info("User returned from System Settings instructions to shortcut decision")
         UserDefaults.standard.removeObject(forKey: UserDefaultsKey.defaultShortcutSetupPending)
+    }
+
+    func completeOnboardingFlow() {
+        logger.info("Marking onboarding flow complete")
+        UserDefaults.standard.set(
+            UserDefaultsKey.currentOnboardingVersion,
+            forKey: UserDefaultsKey.onboardingCompletedVersion
+        )
     }
 
     func refreshPendingDefaultShortcutSetup(
@@ -290,13 +305,20 @@ final class HotkeyConflictResolutionManager {
         macScreenshotShortcutService.screenshotShortcutState()
     }
 
+    private func screenshotShortcutStatuses(for state: MacScreenshotShortcutState) -> [MacScreenshotShortcutStatus] {
+        macScreenshotShortcutService.screenshotShortcutStatuses(for: state) ?? []
+    }
+
     private func confirmationFailureMessage(for state: MacScreenshotShortcutState) -> String {
         switch state {
         case .allDisabled:
             return ""
         case .active(let conflicts):
-            let shortcutNames = conflicts.map(\.systemShortcutName).joined(separator: ", ")
-            return "ClearshotX still reads these Screenshots rows as enabled: \(shortcutNames). Turn off all five rows, then try again."
+            if conflicts.count == 1 {
+                return "ClearshotX still sees one Screenshots shortcut enabled."
+            }
+
+            return "ClearshotX still sees \(conflicts.count) Screenshots shortcuts enabled."
         case .unknown:
             return "ClearshotX could not read a complete enabled/disabled state for all five macOS Screenshots shortcut rows yet. Close System Settings after changing them, then try again."
         }
