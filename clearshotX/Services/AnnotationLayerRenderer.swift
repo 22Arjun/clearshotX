@@ -24,6 +24,7 @@ final class AnnotationRendererRegistry {
         ArrowAnnotationRenderer(),
         RectangleAnnotationRenderer(),
         OvalAnnotationRenderer(),
+        HighlightAnnotationRenderer(),
         TextAnnotationRenderer()
     ]) {
         self.renderers = renderers
@@ -55,22 +56,26 @@ final class AnnotationLayerRenderer {
         CATransaction.setDisableActions(true)
         containerLayer.sublayers = []
 
-        for annotation in annotations {
+        for annotation in annotations.sortedForEditorRendering() {
             _ = addLayer(for: annotation, to: containerLayer, contentsScale: contentsScale)
+        }
 
-            if annotation.id == selectedAnnotationID {
-                addSelectionLayer(
-                    for: annotation,
-                    to: containerLayer,
-                    contentsScale: contentsScale,
-                    handleSize: selectionHandleSize
-                )
-            }
+        if let selectedAnnotation = annotations.first(where: { annotation in
+            annotation.id == selectedAnnotationID
+        }) {
+            addSelectionLayer(
+                for: selectedAnnotation,
+                to: containerLayer,
+                contentsScale: contentsScale,
+                handleSize: selectionHandleSize
+            )
         }
 
         if let draftAnnotation {
             let draftLayer = addLayer(for: draftAnnotation, to: containerLayer, contentsScale: contentsScale)
-            draftLayer.opacity = 0.82
+            if draftAnnotation.kind != .highlight {
+                draftLayer.opacity = 0.82
+            }
         }
 
         CATransaction.commit()
@@ -130,6 +135,16 @@ final class AnnotationLayerRenderer {
             handleLayer.lineWidth = 1.5
             handleLayer.contentsScale = contentsScale
             containerLayer.addSublayer(handleLayer)
+        }
+    }
+}
+
+private extension [AnnotationObject] {
+    func sortedForEditorRendering() -> [AnnotationObject] {
+        filter { annotation in
+            annotation.kind == .highlight
+        } + filter { annotation in
+            annotation.kind != .highlight
         }
     }
 }
@@ -342,6 +357,70 @@ final class OvalAnnotationRenderer: AnnotationShapeRendering {
         }
 
         return CGPath(ellipseIn: rect.standardizedForEditor, transform: nil)
+    }
+}
+
+final class HighlightAnnotationRenderer: AnnotationShapeRendering {
+    let kind = AnnotationObjectKind.highlight
+
+    func makeLayer(for annotation: AnnotationObject) -> CALayer {
+        let layer = CAShapeLayer()
+        layer.path = highlightPath(for: annotation)
+        layer.fillColor = annotation.style.strokeColor.cgColor
+        layer.strokeColor = NSColor.clear.cgColor
+        layer.lineWidth = 0
+        layer.lineJoin = .round
+        layer.opacity = Float(effectiveOpacity(for: annotation))
+        layer.allowsEdgeAntialiasing = true
+        return layer
+    }
+
+    func hitTest(_ point: CGPoint, annotation: AnnotationObject, tolerance: CGFloat) -> Bool {
+        guard case let .highlight(rect) = annotation.geometry else {
+            return false
+        }
+
+        return rect.standardizedForEditor
+            .insetBy(dx: -tolerance, dy: -tolerance)
+            .contains(point)
+    }
+
+    func resizeHandles(for annotation: AnnotationObject, size: CGFloat) -> [AnnotationResizeHandle: CGRect] {
+        guard case let .highlight(rect) = annotation.geometry else {
+            return [:]
+        }
+
+        let normalizedRect = rect.standardizedForEditor
+
+        return [
+            .topLeft: handleRect(centeredAt: CGPoint(x: normalizedRect.minX, y: normalizedRect.minY), size: size),
+            .topRight: handleRect(centeredAt: CGPoint(x: normalizedRect.maxX, y: normalizedRect.minY), size: size),
+            .bottomLeft: handleRect(centeredAt: CGPoint(x: normalizedRect.minX, y: normalizedRect.maxY), size: size),
+            .bottomRight: handleRect(centeredAt: CGPoint(x: normalizedRect.maxX, y: normalizedRect.maxY), size: size)
+        ]
+    }
+
+    func selectionPath(for annotation: AnnotationObject) -> CGPath {
+        highlightPath(for: annotation)
+    }
+
+    private func highlightPath(for annotation: AnnotationObject) -> CGPath {
+        guard case let .highlight(rect) = annotation.geometry else {
+            return CGMutablePath()
+        }
+
+        let normalizedRect = rect.standardizedForEditor
+        let cornerRadius = min(4, max(1.5, min(normalizedRect.width, normalizedRect.height) * 0.08))
+        return CGPath(
+            roundedRect: normalizedRect,
+            cornerWidth: cornerRadius,
+            cornerHeight: cornerRadius,
+            transform: nil
+        )
+    }
+
+    private func effectiveOpacity(for annotation: AnnotationObject) -> CGFloat {
+        max(0.14, min(0.42, annotation.style.opacity * 0.42))
     }
 }
 

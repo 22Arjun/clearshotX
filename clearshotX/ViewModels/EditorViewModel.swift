@@ -527,6 +527,9 @@ final class EditorViewModel: ObservableObject {
         case "t":
             selectTool(.text)
             return true
+        case "h":
+            selectTool(.highlight)
+            return true
         default:
             return false
         }

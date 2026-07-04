@@ -35,6 +35,7 @@ enum AnnotationGeometry: Equatable {
     case rectangle(CGRect)
     case oval(CGRect)
     case text(rect: CGRect, text: String)
+    case highlight(CGRect)
 
     var bounds: CGRect {
         switch self {
@@ -45,7 +46,7 @@ enum AnnotationGeometry: Equatable {
                 width: abs(end.x - start.x),
                 height: abs(end.y - start.y)
             )
-        case let .rectangle(rect), let .oval(rect):
+        case let .rectangle(rect), let .oval(rect), let .highlight(rect):
             return rect.standardizedForEditor
         case let .text(rect, _):
             return rect.standardizedForEditor
@@ -65,6 +66,8 @@ enum AnnotationGeometry: Equatable {
             return .oval(rect.offsetBy(dx: translation.width, dy: translation.height))
         case let .text(rect, text):
             return .text(rect: rect.offsetBy(dx: translation.width, dy: translation.height), text: text)
+        case let .highlight(rect):
+            return .highlight(rect.offsetBy(dx: translation.width, dy: translation.height))
         }
     }
 
@@ -212,6 +215,49 @@ enum AnnotationGeometry: Equatable {
             case .startPoint, .endPoint:
                 return self
             }
+        case let .highlight(rect):
+            let normalizedRect = rect.standardizedForEditor
+
+            switch handle {
+            case .topLeft:
+                return .highlight(
+                    CGRect(
+                        x: point.x,
+                        y: point.y,
+                        width: normalizedRect.maxX - point.x,
+                        height: normalizedRect.maxY - point.y
+                    ).standardizedForEditor
+                )
+            case .topRight:
+                return .highlight(
+                    CGRect(
+                        x: normalizedRect.minX,
+                        y: point.y,
+                        width: point.x - normalizedRect.minX,
+                        height: normalizedRect.maxY - point.y
+                    ).standardizedForEditor
+                )
+            case .bottomLeft:
+                return .highlight(
+                    CGRect(
+                        x: point.x,
+                        y: normalizedRect.minY,
+                        width: normalizedRect.maxX - point.x,
+                        height: point.y - normalizedRect.minY
+                    ).standardizedForEditor
+                )
+            case .bottomRight:
+                return .highlight(
+                    CGRect(
+                        x: normalizedRect.minX,
+                        y: normalizedRect.minY,
+                        width: point.x - normalizedRect.minX,
+                        height: point.y - normalizedRect.minY
+                    ).standardizedForEditor
+                )
+            case .startPoint, .endPoint:
+                return self
+            }
         }
     }
 }
@@ -296,6 +342,19 @@ struct AnnotationObject: Identifiable, Equatable {
             id: id,
             kind: .text,
             geometry: .text(rect: rect.standardizedForEditor, text: text),
+            style: style
+        )
+    }
+
+    static func highlight(
+        id: UUID = UUID(),
+        rect: CGRect,
+        style: AnnotationStyle
+    ) -> AnnotationObject {
+        AnnotationObject(
+            id: id,
+            kind: .highlight,
+            geometry: .highlight(rect.standardizedForEditor),
             style: style
         )
     }

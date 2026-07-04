@@ -896,7 +896,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     }
 
     private var drawingToolIsActive: Bool {
-        activeTool == .arrow || activeTool == .rectangle || activeTool == .oval
+        activeTool == .arrow || activeTool == .rectangle || activeTool == .oval || activeTool == .highlight
     }
 }
 
@@ -968,11 +968,13 @@ private extension View {
             keyboardShortcut("o", modifiers: [])
         case .text:
             keyboardShortcut("t", modifiers: [])
+        case .highlight:
+            keyboardShortcut("h", modifiers: [])
         case .undo:
             keyboardShortcut("z", modifiers: [.command])
         case .redo:
             keyboardShortcut("z", modifiers: [.command, .shift])
-        case .highlight, .blurPixelate, .copy, .save:
+        case .blurPixelate, .copy, .save:
             self
         }
     }
