@@ -37,7 +37,7 @@ final class QuickAccessOverlayManager {
     func show(
         capture: CaptureResult,
         clipboardService: ClipboardService,
-        previewWindowManager: PreviewWindowManager
+        editorWindowManager: EditorWindowManager
     ) {
         currentCapture = capture
         dismissWorkItem?.cancel()
@@ -54,9 +54,9 @@ final class QuickAccessOverlayManager {
             onSave: { [weak self] in
                 self?.save(capture)
             },
-            onEdit: { [weak self, previewWindowManager, clipboardService] in
+            onEdit: { [weak self, editorWindowManager] in
                 self?.dismiss(animated: true)
-                previewWindowManager.showPreview(for: capture, clipboardService: clipboardService)
+                editorWindowManager.showEditor(for: capture)
             },
             onPin: { [weak self] in
                 self?.pin(capture)

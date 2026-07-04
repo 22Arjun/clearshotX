@@ -21,7 +21,7 @@ final class AppShellViewModel: ObservableObject {
     private let screenCaptureService: ScreenCaptureService
     private let captureSoundService: CaptureSoundService
     private let clipboardService: ClipboardService
-    private let previewWindowManager: PreviewWindowManager
+    private let editorWindowManager: EditorWindowManager
     private let quickAccessOverlayManager: QuickAccessOverlayManager
     private let regionSelectionManager: RegionSelectionManager
     private let windowSelectionManager: WindowSelectionManager
@@ -39,7 +39,7 @@ final class AppShellViewModel: ObservableObject {
         screenCaptureService: ScreenCaptureService? = nil,
         captureSoundService: CaptureSoundService? = nil,
         clipboardService: ClipboardService? = nil,
-        previewWindowManager: PreviewWindowManager? = nil,
+        editorWindowManager: EditorWindowManager? = nil,
         quickAccessOverlayManager: QuickAccessOverlayManager? = nil,
         regionSelectionManager: RegionSelectionManager? = nil,
         windowSelectionManager: WindowSelectionManager? = nil,
@@ -53,7 +53,7 @@ final class AppShellViewModel: ObservableObject {
         self.screenCaptureService = screenCaptureService ?? ScreenCaptureService()
         self.captureSoundService = captureSoundService ?? CaptureSoundService()
         self.clipboardService = clipboardService ?? ClipboardService()
-        self.previewWindowManager = previewWindowManager ?? PreviewWindowManager()
+        self.editorWindowManager = editorWindowManager ?? EditorWindowManager()
         self.quickAccessOverlayManager = quickAccessOverlayManager ?? QuickAccessOverlayManager()
         self.regionSelectionManager = regionSelectionManager ?? RegionSelectionManager()
         self.windowSelectionManager = windowSelectionManager ?? WindowSelectionManager()
@@ -339,7 +339,7 @@ final class AppShellViewModel: ObservableObject {
         quickAccessOverlayManager.show(
             capture: capture,
             clipboardService: clipboardService,
-            previewWindowManager: previewWindowManager
+            editorWindowManager: editorWindowManager
         )
         NotificationCenter.default.post(name: .clearshotXCaptureSucceeded, object: nil)
     }
