@@ -36,7 +36,8 @@ final class EditorWindowManager {
             backing: .buffered,
             defer: false
         )
-        window.title = editorTitle(for: sourceFileURL)
+        window.title = ""
+        window.titleVisibility = .hidden
         window.contentMinSize = minContentSize
         window.collectionBehavior = [.fullScreenAuxiliary]
         window.backgroundColor = .windowBackgroundColor
@@ -75,14 +76,6 @@ final class EditorWindowManager {
                 max(minContentSize.height, fittedImageSize.height + toolbarHeight + contentPadding)
             )
         )
-    }
-
-    private func editorTitle(for sourceFileURL: URL?) -> String {
-        guard let sourceFileURL else {
-            return "ClearshotX Editor"
-        }
-
-        return "Edit \(sourceFileURL.lastPathComponent)"
     }
 }
 

@@ -57,7 +57,17 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
                 ),
                 style: style
             )
-        case .oval, .text, .highlight, .blurPixelate:
+        case .oval:
+            return AnnotationObject.oval(
+                rect: CGRect(
+                    x: startPoint.x,
+                    y: startPoint.y,
+                    width: endPoint.x - startPoint.x,
+                    height: endPoint.y - startPoint.y
+                ),
+                style: style
+            )
+        case .text, .highlight, .blurPixelate:
             return nil
         }
     }
@@ -66,7 +76,7 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
         switch annotation.geometry {
         case let .arrow(start, end):
             return hypot(end.x - start.x, end.y - start.y) >= 8
-        case let .rectangle(rect):
+        case let .rectangle(rect), let .oval(rect):
             return rect.standardizedForEditor.width >= 8 && rect.standardizedForEditor.height >= 8
         }
     }

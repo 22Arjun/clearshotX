@@ -109,9 +109,9 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         case .blurPixelate:
             "B"
         case .undo:
-            "Z"
+            "⌘Z"
         case .redo:
-            "Y"
+            "⇧⌘Z"
         case .copy:
             "C"
         case .save:
@@ -170,6 +170,7 @@ final class EditorViewModel: ObservableObject {
     ]
 
     static let strokeWidthOptions: [CGFloat] = [2, 4, 6, 8]
+    static let opacityOptions: [CGFloat] = [1, 0.75, 0.5]
 
     let id = UUID()
     let image: NSImage
@@ -181,9 +182,15 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var draftAnnotationObject: AnnotationObject?
     @Published private(set) var selectedStrokeColorID = "red"
     @Published private(set) var selectedStrokeWidth: CGFloat = 4
+    @Published private(set) var selectedOpacity: CGFloat = 1
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
 
     private let annotationInteractionService: AnnotationInteractionServicing
     private var activeDragSession: EditorDragSession?
+    private var undoStack: [EditorHistoryState] = []
+    private var redoStack: [EditorHistoryState] = []
+    private let historyLimit = 80
 
     var selectedStrokeColor: NSColor {
         Self.strokeColorOptions.first { option in
@@ -229,12 +236,42 @@ final class EditorViewModel: ObservableObject {
         return activeTool == tool
     }
 
+    func isEnabled(_ action: EditorToolbarAction) -> Bool {
+        switch action {
+        case .undo:
+            canUndo
+        case .redo:
+            canRedo
+        case .arrow, .rectangle, .oval, .text, .highlight, .blurPixelate, .copy, .save:
+            true
+        }
+    }
+
     func setStrokeColor(_ option: EditorStrokeColorOption) {
+        let previousState = currentHistoryState()
         selectedStrokeColorID = option.id
+
+        if applyActiveStyleToSelectedAnnotation() {
+            recordUndoState(previousState)
+        }
     }
 
     func setStrokeWidth(_ width: CGFloat) {
+        let previousState = currentHistoryState()
         selectedStrokeWidth = width
+
+        if applyActiveStyleToSelectedAnnotation() {
+            recordUndoState(previousState)
+        }
+    }
+
+    func setOpacity(_ opacity: CGFloat) {
+        let previousState = currentHistoryState()
+        selectedOpacity = opacity
+
+        if applyActiveStyleToSelectedAnnotation() {
+            recordUndoState(previousState)
+        }
     }
 
     func isStrokeColorSelected(_ option: EditorStrokeColorOption) -> Bool {
@@ -243,6 +280,10 @@ final class EditorViewModel: ObservableObject {
 
     func isStrokeWidthSelected(_ width: CGFloat) -> Bool {
         selectedStrokeWidth == width
+    }
+
+    func isOpacitySelected(_ opacity: CGFloat) -> Bool {
+        selectedOpacity == opacity
     }
 
     func beginCanvasInteraction(
@@ -261,7 +302,8 @@ final class EditorViewModel: ObservableObject {
             activeDragSession = .resizing(
                 annotationID: annotationID,
                 handle: handle,
-                originalAnnotation: annotation
+                originalAnnotation: annotation,
+                initialHistoryState: currentHistoryState()
             )
         case let .annotation(annotationID):
             guard let annotation = annotation(withID: annotationID) else {
@@ -272,7 +314,8 @@ final class EditorViewModel: ObservableObject {
             activeDragSession = .moving(
                 annotationID: annotationID,
                 startPoint: point,
-                originalAnnotation: annotation
+                originalAnnotation: annotation,
+                initialHistoryState: currentHistoryState()
             )
         case .empty:
             selectedAnnotationID = nil
@@ -307,7 +350,7 @@ final class EditorViewModel: ObservableObject {
                 endPoint: point,
                 style: activeAnnotationStyle()
             )
-        case let .moving(annotationID, startPoint, originalAnnotation):
+        case let .moving(annotationID, startPoint, originalAnnotation, _):
             let translation = CGSize(
                 width: point.x - startPoint.x,
                 height: point.y - startPoint.y
@@ -316,7 +359,7 @@ final class EditorViewModel: ObservableObject {
                 withID: annotationID,
                 to: originalAnnotation.translated(by: translation)
             )
-        case let .resizing(annotationID, handle, originalAnnotation):
+        case let .resizing(annotationID, handle, originalAnnotation, _):
             updateAnnotation(
                 withID: annotationID,
                 to: originalAnnotation.resized(using: handle, to: point)
@@ -325,10 +368,20 @@ final class EditorViewModel: ObservableObject {
     }
 
     func endCanvasInteraction() {
-        if let draftAnnotationObject,
-           annotationInteractionService.shouldCommit(draftAnnotationObject) {
-            annotationObjects.append(draftAnnotationObject)
-            selectedAnnotationID = draftAnnotationObject.id
+        switch activeDragSession {
+        case .drawing:
+            if let draftAnnotationObject,
+               annotationInteractionService.shouldCommit(draftAnnotationObject) {
+                let previousState = currentHistoryState()
+                annotationObjects.append(draftAnnotationObject)
+                selectedAnnotationID = draftAnnotationObject.id
+                recordUndoState(previousState)
+            }
+        case let .moving(_, _, _, initialHistoryState),
+             let .resizing(_, _, _, initialHistoryState):
+            commitHistoryTransition(from: initialHistoryState)
+        case .none:
+            break
         }
 
         draftAnnotationObject = nil
@@ -349,12 +402,14 @@ final class EditorViewModel: ObservableObject {
             return
         }
 
+        let previousState = currentHistoryState()
         annotationObjects.removeAll { annotation in
             annotation.id == selectedAnnotationID
         }
         self.selectedAnnotationID = nil
         draftAnnotationObject = nil
         activeDragSession = nil
+        recordUndoState(previousState)
     }
 
     func deselectAnnotation() {
@@ -376,17 +431,34 @@ final class EditorViewModel: ObservableObject {
         case "r":
             selectTool(.rectangle)
             return true
+        case "o":
+            selectTool(.oval)
+            return true
         default:
             return false
         }
     }
 
-    private func undo() {
-        logStub("Undo requested")
+    func undo() {
+        guard let previousState = undoStack.popLast() else {
+            updateHistoryAvailability()
+            return
+        }
+
+        redoStack.append(currentHistoryState())
+        restore(previousState)
+        updateHistoryAvailability()
     }
 
-    private func redo() {
-        logStub("Redo requested")
+    func redo() {
+        guard let nextState = redoStack.popLast() else {
+            updateHistoryAvailability()
+            return
+        }
+
+        undoStack.append(currentHistoryState())
+        restore(nextState)
+        updateHistoryAvailability()
     }
 
     private func copy() {
@@ -413,7 +485,7 @@ final class EditorViewModel: ObservableObject {
             strokeColor: selectedStrokeColor,
             fillColor: .clear,
             lineWidth: selectedStrokeWidth,
-            opacity: 1
+            opacity: selectedOpacity
         )
     }
 
@@ -432,10 +504,86 @@ final class EditorViewModel: ObservableObject {
 
         annotationObjects[index] = updatedAnnotation
     }
+
+    @discardableResult
+    private func applyActiveStyleToSelectedAnnotation() -> Bool {
+        guard let selectedAnnotationID,
+              let annotation = annotation(withID: selectedAnnotationID)
+        else {
+            return false
+        }
+
+        let styledAnnotation = annotation.applyingStyle(activeAnnotationStyle())
+
+        guard styledAnnotation != annotation else {
+            return false
+        }
+
+        updateAnnotation(withID: selectedAnnotationID, to: styledAnnotation)
+        return true
+    }
+
+    private func currentHistoryState() -> EditorHistoryState {
+        EditorHistoryState(
+            annotationObjects: annotationObjects,
+            selectedAnnotationID: selectedAnnotationID
+        )
+    }
+
+    private func restore(_ state: EditorHistoryState) {
+        annotationObjects = state.annotationObjects
+        selectedAnnotationID = state.selectedAnnotationID
+        draftAnnotationObject = nil
+        activeDragSession = nil
+    }
+
+    private func commitHistoryTransition(from previousState: EditorHistoryState) {
+        guard currentHistoryState() != previousState else {
+            return
+        }
+
+        recordUndoState(previousState)
+    }
+
+    private func recordUndoState(_ state: EditorHistoryState) {
+        guard currentHistoryState() != state else {
+            updateHistoryAvailability()
+            return
+        }
+
+        undoStack.append(state)
+
+        if undoStack.count > historyLimit {
+            undoStack.removeFirst(undoStack.count - historyLimit)
+        }
+
+        redoStack.removeAll()
+        updateHistoryAvailability()
+    }
+
+    private func updateHistoryAvailability() {
+        canUndo = !undoStack.isEmpty
+        canRedo = !redoStack.isEmpty
+    }
 }
 
 private enum EditorDragSession {
     case drawing(tool: EditorTool, startPoint: CGPoint)
-    case moving(annotationID: UUID, startPoint: CGPoint, originalAnnotation: AnnotationObject)
-    case resizing(annotationID: UUID, handle: AnnotationResizeHandle, originalAnnotation: AnnotationObject)
+    case moving(
+        annotationID: UUID,
+        startPoint: CGPoint,
+        originalAnnotation: AnnotationObject,
+        initialHistoryState: EditorHistoryState
+    )
+    case resizing(
+        annotationID: UUID,
+        handle: AnnotationResizeHandle,
+        originalAnnotation: AnnotationObject,
+        initialHistoryState: EditorHistoryState
+    )
+}
+
+private struct EditorHistoryState: Equatable {
+    let annotationObjects: [AnnotationObject]
+    let selectedAnnotationID: UUID?
 }

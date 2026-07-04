@@ -34,99 +34,163 @@ private struct EditorToolbarView: View {
     @ObservedObject var viewModel: EditorViewModel
 
     var body: some View {
-        HStack(spacing: 10) {
-            toolbarGroup(EditorToolbarAction.drawingTools)
-            toolbarDivider
+        HStack(spacing: 8) {
+            toolButtonGroup(EditorToolbarAction.drawingTools)
             colorPalette
-            toolbarDivider
             strokeWidthPicker
-            toolbarDivider
-            toolbarGroup(EditorToolbarAction.historyCommands)
-            toolbarDivider
-            toolbarGroup(EditorToolbarAction.outputCommands)
-            Spacer(minLength: 8)
+            opacityMenu
+            Spacer(minLength: 12)
+            toolButtonGroup(EditorToolbarAction.historyCommands)
+            toolButtonGroup(EditorToolbarAction.outputCommands)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 54)
-        .background(.regularMaterial)
+        .padding(.horizontal, 16)
+        .frame(height: 62)
+        .background {
+            Rectangle()
+                .fill(.regularMaterial)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(Color(nsColor: .separatorColor).opacity(0.72))
+                        .frame(height: 1)
+                }
+        }
     }
 
-    private func toolbarGroup(_ actions: [EditorToolbarAction]) -> some View {
-        HStack(spacing: 5) {
+    private func toolButtonGroup(_ actions: [EditorToolbarAction]) -> some View {
+        HStack(spacing: 3) {
             ForEach(actions) { action in
                 Button {
                     viewModel.perform(action)
                 } label: {
                     Image(systemName: action.systemImageName)
                         .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 34, height: 30)
+                        .symbolRenderingMode(.hierarchical)
+                        .frame(width: 34, height: 34)
                         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
                 .buttonStyle(EditorToolbarButtonStyle(isSelected: viewModel.isSelected(action)))
+                .disabled(!viewModel.isEnabled(action))
                 .help("\(action.title) (\(action.shortcutHint))")
                 .editorKeyboardShortcut(for: action)
             }
         }
+        .toolbarGroupChrome()
     }
 
     private var colorPalette: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 3) {
             ForEach(EditorViewModel.strokeColorOptions) { option in
                 Button {
                     viewModel.setStrokeColor(option)
                 } label: {
-                    Circle()
-                        .fill(Color(nsColor: option.color))
-                        .frame(width: 18, height: 18)
-                        .overlay {
-                            Circle()
-                                .stroke(
-                                    viewModel.isStrokeColorSelected(option)
-                                        ? Color.accentColor
-                                        : Color(nsColor: .separatorColor),
-                                    lineWidth: viewModel.isStrokeColorSelected(option) ? 2 : 1
-                                )
-                        }
-                        .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(
+                                viewModel.isStrokeColorSelected(option)
+                                    ? Color.accentColor.opacity(0.16)
+                                    : Color.clear
+                            )
+
+                        Circle()
+                            .fill(Color(nsColor: option.color))
+                            .frame(width: 18, height: 18)
+                            .overlay {
+                                Circle()
+                                    .stroke(Color(nsColor: .separatorColor).opacity(0.78), lineWidth: 1)
+                            }
+                            .overlay {
+                                if viewModel.isStrokeColorSelected(option) {
+                                    Circle()
+                                        .stroke(Color.accentColor, lineWidth: 2)
+                                        .frame(width: 24, height: 24)
+                                }
+                            }
+                    }
+                    .frame(width: 34, height: 34)
+                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EditorPaletteButtonStyle(isSelected: viewModel.isStrokeColorSelected(option)))
                 .help("Stroke Color: \(option.name)")
             }
         }
+        .toolbarGroupChrome()
     }
 
     private var strokeWidthPicker: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 3) {
             ForEach(EditorViewModel.strokeWidthOptions, id: \.self) { width in
                 Button {
                     viewModel.setStrokeWidth(width)
                 } label: {
-                    Capsule()
-                        .fill(Color(nsColor: .labelColor))
-                        .frame(width: 21, height: max(2, min(width, 8)))
-                        .frame(width: 32, height: 30)
-                        .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(
-                                    viewModel.isStrokeWidthSelected(width)
-                                        ? Color.accentColor.opacity(0.18)
-                                        : Color(nsColor: .controlBackgroundColor).opacity(0.64)
-                                )
-                        )
-                        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(
+                                viewModel.isStrokeWidthSelected(width)
+                                    ? Color.accentColor.opacity(0.16)
+                                    : Color.clear
+                            )
+
+                        Capsule()
+                            .fill(
+                                viewModel.isStrokeWidthSelected(width)
+                                    ? Color.accentColor
+                                    : Color(nsColor: .labelColor).opacity(0.82)
+                            )
+                            .frame(width: 20, height: max(2, min(width, 8)))
+                    }
+                    .frame(width: 34, height: 34)
+                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(EditorPaletteButtonStyle(isSelected: viewModel.isStrokeWidthSelected(width)))
                 .help("Stroke Width: \(Int(width))")
             }
         }
+        .toolbarGroupChrome()
     }
 
-    private var toolbarDivider: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(width: 1, height: 24)
-            .padding(.horizontal, 2)
+    private var opacityMenu: some View {
+        Menu {
+            ForEach(EditorViewModel.opacityOptions, id: \.self) { opacity in
+                Button {
+                    viewModel.setOpacity(opacity)
+                } label: {
+                    HStack {
+                        if viewModel.isOpacitySelected(opacity) {
+                            Image(systemName: "checkmark")
+                        }
+                        Text("\(Int(opacity * 100))%")
+                    }
+                }
+            }
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.clear)
+
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(nsColor: viewModel.selectedStrokeColor).opacity(viewModel.selectedOpacity))
+            }
+            .frame(width: 34, height: 34)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .help("Opacity: \(Int(viewModel.selectedOpacity * 100))%")
+        .toolbarGroupChrome()
+    }
+}
+
+private extension View {
+    func toolbarGroupChrome() -> some View {
+        padding(4)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 1)
+            }
     }
 }
 
@@ -135,11 +199,20 @@ private struct EditorToolbarButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(isSelected ? Color.white : Color(nsColor: .labelColor))
+            .foregroundStyle(foregroundColor)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(backgroundColor(isPressed: configuration.isPressed))
             )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(borderColor(isPressed: configuration.isPressed), lineWidth: 1)
+            }
+            .opacity(configuration.isPressed ? 0.92 : 1)
+    }
+
+    private var foregroundColor: Color {
+        isSelected ? Color.white : Color(nsColor: .labelColor).opacity(0.88)
     }
 
     private func backgroundColor(isPressed: Bool) -> Color {
@@ -148,10 +221,39 @@ private struct EditorToolbarButtonStyle: ButtonStyle {
         }
 
         if isPressed {
-            return Color(nsColor: .selectedControlColor).opacity(0.32)
+            return Color(nsColor: .selectedControlColor).opacity(0.28)
         }
 
-        return Color(nsColor: .controlBackgroundColor).opacity(0.72)
+        return Color.clear
+    }
+
+    private func borderColor(isPressed: Bool) -> Color {
+        if isSelected {
+            return Color.white.opacity(0.22)
+        }
+
+        if isPressed {
+            return Color(nsColor: .separatorColor).opacity(0.72)
+        }
+
+        return Color.clear
+    }
+}
+
+private struct EditorPaletteButtonStyle: ButtonStyle {
+    let isSelected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(configuration.isPressed ? Color(nsColor: .selectedControlColor).opacity(0.22) : Color.clear)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
+            }
+            .opacity(configuration.isPressed ? 0.9 : 1)
     }
 }
 
@@ -319,6 +421,26 @@ private final class EditorCanvasNSView: NSView {
             viewModel.clearActiveTool()
             refreshFromViewModel()
         default:
+            if event.modifierFlags.contains(.command),
+               let shortcut = event.charactersIgnoringModifiers?.lowercased() {
+                switch shortcut {
+                case "z" where event.modifierFlags.contains(.shift):
+                    viewModel.redo()
+                    refreshFromViewModel()
+                    return
+                case "z":
+                    viewModel.undo()
+                    refreshFromViewModel()
+                    return
+                case "y":
+                    viewModel.redo()
+                    refreshFromViewModel()
+                    return
+                default:
+                    break
+                }
+            }
+
             guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
                   let shortcut = event.charactersIgnoringModifiers,
                   viewModel.handleShortcut(shortcut)
@@ -505,7 +627,7 @@ private final class EditorCanvasNSView: NSView {
     }
 
     private var drawingToolIsActive: Bool {
-        activeTool == .arrow || activeTool == .rectangle
+        activeTool == .arrow || activeTool == .rectangle || activeTool == .oval
     }
 }
 
@@ -559,7 +681,13 @@ private extension View {
             keyboardShortcut("a", modifiers: [])
         case .rectangle:
             keyboardShortcut("r", modifiers: [])
-        case .oval, .text, .highlight, .blurPixelate, .undo, .redo, .copy, .save:
+        case .oval:
+            keyboardShortcut("o", modifiers: [])
+        case .undo:
+            keyboardShortcut("z", modifiers: [.command])
+        case .redo:
+            keyboardShortcut("z", modifiers: [.command, .shift])
+        case .text, .highlight, .blurPixelate, .copy, .save:
             self
         }
     }

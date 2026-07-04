@@ -33,6 +33,7 @@ enum AnnotationResizeHandle: String, CaseIterable {
 enum AnnotationGeometry: Equatable {
     case arrow(start: CGPoint, end: CGPoint)
     case rectangle(CGRect)
+    case oval(CGRect)
 
     var bounds: CGRect {
         switch self {
@@ -43,7 +44,7 @@ enum AnnotationGeometry: Equatable {
                 width: abs(end.x - start.x),
                 height: abs(end.y - start.y)
             )
-        case let .rectangle(rect):
+        case let .rectangle(rect), let .oval(rect):
             return rect.standardizedForEditor
         }
     }
@@ -57,6 +58,8 @@ enum AnnotationGeometry: Equatable {
             )
         case let .rectangle(rect):
             return .rectangle(rect.offsetBy(dx: translation.width, dy: translation.height))
+        case let .oval(rect):
+            return .oval(rect.offsetBy(dx: translation.width, dy: translation.height))
         }
     }
 
@@ -104,6 +107,49 @@ enum AnnotationGeometry: Equatable {
                 )
             case .bottomRight:
                 return .rectangle(
+                    CGRect(
+                        x: normalizedRect.minX,
+                        y: normalizedRect.minY,
+                        width: point.x - normalizedRect.minX,
+                        height: point.y - normalizedRect.minY
+                    ).standardizedForEditor
+                )
+            case .startPoint, .endPoint:
+                return self
+            }
+        case let .oval(rect):
+            let normalizedRect = rect.standardizedForEditor
+
+            switch handle {
+            case .topLeft:
+                return .oval(
+                    CGRect(
+                        x: point.x,
+                        y: point.y,
+                        width: normalizedRect.maxX - point.x,
+                        height: normalizedRect.maxY - point.y
+                    ).standardizedForEditor
+                )
+            case .topRight:
+                return .oval(
+                    CGRect(
+                        x: normalizedRect.minX,
+                        y: point.y,
+                        width: point.x - normalizedRect.minX,
+                        height: normalizedRect.maxY - point.y
+                    ).standardizedForEditor
+                )
+            case .bottomLeft:
+                return .oval(
+                    CGRect(
+                        x: point.x,
+                        y: normalizedRect.minY,
+                        width: normalizedRect.maxX - point.x,
+                        height: point.y - normalizedRect.minY
+                    ).standardizedForEditor
+                )
+            case .bottomRight:
+                return .oval(
                     CGRect(
                         x: normalizedRect.minX,
                         y: normalizedRect.minY,
@@ -174,6 +220,19 @@ struct AnnotationObject: Identifiable, Equatable {
         )
     }
 
+    static func oval(
+        id: UUID = UUID(),
+        rect: CGRect,
+        style: AnnotationStyle
+    ) -> AnnotationObject {
+        AnnotationObject(
+            id: id,
+            kind: .oval,
+            geometry: .oval(rect.standardizedForEditor),
+            style: style
+        )
+    }
+
     func translated(by translation: CGSize) -> AnnotationObject {
         var object = self
         object.geometry = geometry.translated(by: translation)
@@ -183,6 +242,12 @@ struct AnnotationObject: Identifiable, Equatable {
     func resized(using handle: AnnotationResizeHandle, to point: CGPoint) -> AnnotationObject {
         var object = self
         object.geometry = geometry.resized(using: handle, to: point)
+        return object
+    }
+
+    func applyingStyle(_ style: AnnotationStyle) -> AnnotationObject {
+        var object = self
+        object.style = style
         return object
     }
 }

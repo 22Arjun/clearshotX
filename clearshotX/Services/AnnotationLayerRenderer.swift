@@ -22,7 +22,8 @@ final class AnnotationRendererRegistry {
 
     init(renderers: [AnnotationShapeRendering] = [
         ArrowAnnotationRenderer(),
-        RectangleAnnotationRenderer()
+        RectangleAnnotationRenderer(),
+        OvalAnnotationRenderer()
     ]) {
         self.renderers = renderers
     }
@@ -134,11 +135,11 @@ final class ArrowAnnotationRenderer: AnnotationShapeRendering {
     func makeLayer(for annotation: AnnotationObject) -> CAShapeLayer {
         let layer = CAShapeLayer()
         layer.path = arrowPath(for: annotation)
-        layer.fillColor = NSColor.clear.cgColor
-        layer.strokeColor = annotation.style.strokeColor.cgColor
-        layer.lineWidth = annotation.style.lineWidth
-        layer.lineCap = .round
+        layer.fillColor = annotation.style.strokeColor.cgColor
+        layer.strokeColor = NSColor.clear.cgColor
+        layer.lineWidth = 0
         layer.lineJoin = .round
+        layer.allowsEdgeAntialiasing = true
         layer.opacity = Float(annotation.style.opacity)
         return layer
     }
@@ -149,7 +150,8 @@ final class ArrowAnnotationRenderer: AnnotationShapeRendering {
         }
 
         let expandedTolerance = max(tolerance, annotation.style.lineWidth + 6)
-        return point.distanceToLineSegment(start: start, end: end) <= expandedTolerance
+        return arrowPath(for: annotation).contains(point)
+            || point.distanceToLineSegment(start: start, end: end) <= expandedTolerance
             || resizeHandles(for: annotation, size: expandedTolerance * 1.4).values.contains { handle in
                 handle.contains(point)
             }
@@ -177,26 +179,65 @@ final class ArrowAnnotationRenderer: AnnotationShapeRendering {
             return path
         }
 
-        path.move(to: start)
-        path.addLine(to: end)
+        let deltaX = end.x - start.x
+        let deltaY = end.y - start.y
+        let length = hypot(deltaX, deltaY)
+        guard length > 1 else {
+            return path
+        }
 
-        let angle = atan2(end.y - start.y, end.x - start.x)
-        let arrowHeadLength = max(14, annotation.style.lineWidth * 4.2)
-        let arrowHeadSpread = CGFloat.pi / 7
-        let leftPoint = CGPoint(
-            x: end.x - arrowHeadLength * cos(angle - arrowHeadSpread),
-            y: end.y - arrowHeadLength * sin(angle - arrowHeadSpread)
-        )
-        let rightPoint = CGPoint(
-            x: end.x - arrowHeadLength * cos(angle + arrowHeadSpread),
-            y: end.y - arrowHeadLength * sin(angle + arrowHeadSpread)
+        let unit = CGVector(dx: deltaX / length, dy: deltaY / length)
+        let perpendicular = CGVector(dx: -unit.dy, dy: unit.dx)
+
+        let thickness = annotation.style.lineWidth
+        let tailWidth = min(max(3.5, thickness * 0.85), max(3.5, length * 0.14))
+        let headWidth = min(max(18, thickness * 5.6), max(tailWidth * 2.6, length * 0.58))
+        let headLength = min(max(18, thickness * 5.8), max(8, length * 0.44))
+        let headBase = CGPoint(
+            x: end.x - unit.dx * headLength,
+            y: end.y - unit.dy * headLength
         )
 
-        path.move(to: leftPoint)
+        let tailLeft = offset(start, along: perpendicular, distance: tailWidth / 2)
+        let tailRight = offset(start, along: perpendicular, distance: -tailWidth / 2)
+        let headBaseLeft = offset(headBase, along: perpendicular, distance: headWidth / 2)
+        let headBaseRight = offset(headBase, along: perpendicular, distance: -headWidth / 2)
+        let leftControlA = offset(
+            offset(start, along: unit, distance: length * 0.36),
+            along: perpendicular,
+            distance: tailWidth * 0.8
+        )
+        let leftControlB = offset(
+            offset(headBase, along: unit, distance: -headLength * 0.24),
+            along: perpendicular,
+            distance: headWidth * 0.48
+        )
+        let rightControlA = offset(
+            offset(headBase, along: unit, distance: -headLength * 0.24),
+            along: perpendicular,
+            distance: -headWidth * 0.48
+        )
+        let rightControlB = offset(
+            offset(start, along: unit, distance: length * 0.36),
+            along: perpendicular,
+            distance: -tailWidth * 0.8
+        )
+
+        path.move(to: tailLeft)
+        path.addCurve(to: headBaseLeft, control1: leftControlA, control2: leftControlB)
         path.addLine(to: end)
-        path.addLine(to: rightPoint)
+        path.addLine(to: headBaseRight)
+        path.addCurve(to: tailRight, control1: rightControlA, control2: rightControlB)
+        path.closeSubpath()
 
         return path
+    }
+
+    private func offset(_ point: CGPoint, along vector: CGVector, distance: CGFloat) -> CGPoint {
+        CGPoint(
+            x: point.x + vector.dx * distance,
+            y: point.y + vector.dy * distance
+        )
     }
 }
 
@@ -247,6 +288,55 @@ final class RectangleAnnotationRenderer: AnnotationShapeRendering {
         }
 
         return CGPath(rect: rect.standardizedForEditor, transform: nil)
+    }
+}
+
+final class OvalAnnotationRenderer: AnnotationShapeRendering {
+    let kind = AnnotationObjectKind.oval
+
+    func makeLayer(for annotation: AnnotationObject) -> CAShapeLayer {
+        let layer = CAShapeLayer()
+        layer.path = ovalPath(for: annotation)
+        layer.fillColor = NSColor.clear.cgColor
+        layer.strokeColor = annotation.style.strokeColor.cgColor
+        layer.lineWidth = annotation.style.lineWidth
+        layer.opacity = Float(annotation.style.opacity)
+        return layer
+    }
+
+    func hitTest(_ point: CGPoint, annotation: AnnotationObject, tolerance: CGFloat) -> Bool {
+        guard case let .oval(rect) = annotation.geometry else {
+            return false
+        }
+
+        return rect.standardizedForEditor.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+    }
+
+    func resizeHandles(for annotation: AnnotationObject, size: CGFloat) -> [AnnotationResizeHandle: CGRect] {
+        guard case let .oval(rect) = annotation.geometry else {
+            return [:]
+        }
+
+        let normalizedRect = rect.standardizedForEditor
+
+        return [
+            .topLeft: handleRect(centeredAt: CGPoint(x: normalizedRect.minX, y: normalizedRect.minY), size: size),
+            .topRight: handleRect(centeredAt: CGPoint(x: normalizedRect.maxX, y: normalizedRect.minY), size: size),
+            .bottomLeft: handleRect(centeredAt: CGPoint(x: normalizedRect.minX, y: normalizedRect.maxY), size: size),
+            .bottomRight: handleRect(centeredAt: CGPoint(x: normalizedRect.maxX, y: normalizedRect.maxY), size: size)
+        ]
+    }
+
+    func selectionPath(for annotation: AnnotationObject) -> CGPath {
+        ovalPath(for: annotation)
+    }
+
+    private func ovalPath(for annotation: AnnotationObject) -> CGPath {
+        guard case let .oval(rect) = annotation.geometry else {
+            return CGMutablePath()
+        }
+
+        return CGPath(ellipseIn: rect.standardizedForEditor, transform: nil)
     }
 }
 
