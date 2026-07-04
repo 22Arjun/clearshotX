@@ -19,6 +19,17 @@ final class AlertPresenter {
         alert.runModal()
     }
 
+    func showInfo(title: String, message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
     func showScreenRecordingPermissionAlert(openSettings: () -> Void, quit: () -> Void) {
         let alert = NSAlert()
         alert.alertStyle = .warning

@@ -11,6 +11,7 @@ import Combine
 @MainActor
 final class AppShellViewModel: ObservableObject {
     @Published private(set) var isCapturing = false
+    @Published private(set) var activeHotkeyMode: GlobalHotkeyMode = .preferred
 
     private let screenCaptureService: ScreenCaptureService
     private let clipboardService: ClipboardService
@@ -18,7 +19,13 @@ final class AppShellViewModel: ObservableObject {
     private let quickAccessOverlayManager: QuickAccessOverlayManager
     private let regionSelectionManager: RegionSelectionManager
     private let windowSelectionManager: WindowSelectionManager
+    private let hotkeyConflictResolutionManager: HotkeyConflictResolutionManager
+    private let hotkeySetupWindowManager: HotkeySetupWindowManager
+    private let settingsWindowManager: SettingsWindowManager
     private let alertPresenter: AlertPresenter
+
+    private var appDidFinishLaunchingObserver: NSObjectProtocol?
+    private var appDidBecomeActiveObserver: NSObjectProtocol?
 
     init(
         screenCaptureService: ScreenCaptureService? = nil,
@@ -27,6 +34,9 @@ final class AppShellViewModel: ObservableObject {
         quickAccessOverlayManager: QuickAccessOverlayManager? = nil,
         regionSelectionManager: RegionSelectionManager? = nil,
         windowSelectionManager: WindowSelectionManager? = nil,
+        hotkeyConflictResolutionManager: HotkeyConflictResolutionManager? = nil,
+        hotkeySetupWindowManager: HotkeySetupWindowManager? = nil,
+        settingsWindowManager: SettingsWindowManager? = nil,
         alertPresenter: AlertPresenter? = nil
     ) {
         self.screenCaptureService = screenCaptureService ?? ScreenCaptureService()
@@ -35,7 +45,23 @@ final class AppShellViewModel: ObservableObject {
         self.quickAccessOverlayManager = quickAccessOverlayManager ?? QuickAccessOverlayManager()
         self.regionSelectionManager = regionSelectionManager ?? RegionSelectionManager()
         self.windowSelectionManager = windowSelectionManager ?? WindowSelectionManager()
+        self.hotkeyConflictResolutionManager = hotkeyConflictResolutionManager ?? HotkeyConflictResolutionManager()
+        self.hotkeySetupWindowManager = hotkeySetupWindowManager ?? HotkeySetupWindowManager()
+        self.settingsWindowManager = settingsWindowManager ?? SettingsWindowManager()
         self.alertPresenter = alertPresenter ?? AlertPresenter()
+
+        observeAppActivation()
+        configureGlobalHotkeysAfterLaunch()
+    }
+
+    deinit {
+        if let appDidFinishLaunchingObserver {
+            NotificationCenter.default.removeObserver(appDidFinishLaunchingObserver)
+        }
+
+        if let appDidBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(appDidBecomeActiveObserver)
+        }
     }
 
     func captureFullScreen() {
@@ -117,6 +143,118 @@ final class AppShellViewModel: ObservableObject {
 
     func quit() {
         NSApp.terminate(nil)
+    }
+
+    func shortcutLabel(for action: GlobalHotkeyAction) -> String {
+        hotkeyConflictResolutionManager.shortcutLabel(for: action)
+    }
+
+    func openSettings() {
+        settingsWindowManager.show(viewModel: self)
+    }
+
+    func openDefaultShortcutSetupFromSettings() {
+        showHotkeyResolutionFlow(context: .settings)
+    }
+
+    func resetKeyboardShortcutSetup() {
+        Task {
+            await hotkeyConflictResolutionManager.resetSetup(
+                captureFullScreen: { [weak self] in
+                    self?.captureFullScreen()
+                },
+                captureRegion: { [weak self] in
+                    self?.captureRegion()
+                }
+            )
+            activeHotkeyMode = hotkeyConflictResolutionManager.activeMode
+        }
+    }
+
+    private func configureGlobalHotkeysAfterLaunch() {
+        if NSApp.isRunning {
+            Task { @MainActor in
+                await configureGlobalHotkeysOnLaunch()
+            }
+            return
+        }
+
+        appDidFinishLaunchingObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didFinishLaunchingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                await self?.configureGlobalHotkeysOnLaunch()
+            }
+        }
+    }
+
+    private func configureGlobalHotkeysOnLaunch() async {
+        let presentation = await hotkeyConflictResolutionManager.configureOnLaunch(
+            captureFullScreen: { [weak self] in
+                self?.captureFullScreen()
+            },
+            captureRegion: { [weak self] in
+                self?.captureRegion()
+            }
+        )
+        activeHotkeyMode = hotkeyConflictResolutionManager.activeMode
+
+        switch presentation {
+        case .none:
+            break
+        case .presentOnboarding:
+            showHotkeyResolutionFlow(context: .firstRun)
+        }
+    }
+
+    private func observeAppActivation() {
+        appDidBecomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self, self.hotkeyConflictResolutionManager.defaultShortcutSetupIsPending else {
+                    return
+                }
+
+                await self.hotkeyConflictResolutionManager.refreshPendingDefaultShortcutSetup(
+                    captureFullScreen: { [weak self] in
+                        self?.captureFullScreen()
+                    },
+                    captureRegion: { [weak self] in
+                        self?.captureRegion()
+                    }
+                )
+                self.activeHotkeyMode = self.hotkeyConflictResolutionManager.activeMode
+            }
+        }
+    }
+
+    private func showHotkeyResolutionFlow(context: HotkeyOnboardingFlowContext) {
+        let flowViewModel = HotkeyOnboardingFlowViewModel(
+            context: context,
+            hotkeyConflictResolutionManager: hotkeyConflictResolutionManager,
+            captureFullScreen: { [weak self] in
+                self?.captureFullScreen()
+            },
+            captureRegion: { [weak self] in
+                self?.captureRegion()
+            },
+            onHotkeyModeChanged: { [weak self] in
+                guard let self else { return }
+                self.activeHotkeyMode = self.hotkeyConflictResolutionManager.activeMode
+            },
+            onFinished: { [weak self] in
+                guard let self else { return }
+                self.activeHotkeyMode = self.hotkeyConflictResolutionManager.activeMode
+                self.hotkeySetupWindowManager.close()
+            }
+        )
+
+        hotkeySetupWindowManager.show(viewModel: flowViewModel)
     }
 
     private func handleCaptureError(_ error: Error) {

@@ -15,7 +15,9 @@ struct MenuBarContentView: View {
             viewModel.captureFullScreen()
         } label: {
             Label(
-                viewModel.isCapturing ? "Capturing..." : "Capture Full Screen",
+                viewModel.isCapturing
+                    ? "Capturing..."
+                    : title("Capture Full Screen", action: .captureFullScreen),
                 systemImage: "rectangle.inset.filled"
             )
         }
@@ -26,14 +28,20 @@ struct MenuBarContentView: View {
         Button {
             viewModel.captureRegion()
         } label: {
-            Label("Capture Region", systemImage: "selection.pin.in.out")
+            Label(
+                title("Capture Region", action: .captureRegion),
+                systemImage: "selection.pin.in.out"
+            )
         }
         .disabled(viewModel.isCapturing)
 
         Button {
             viewModel.captureWindow()
         } label: {
-            Label("Capture Window", systemImage: "macwindow")
+            Label(
+                "Capture Window",
+                systemImage: "macwindow"
+            )
         }
         .disabled(viewModel.isCapturing)
 
@@ -46,10 +54,10 @@ struct MenuBarContentView: View {
         }
 
         Button {
+            viewModel.openSettings()
         } label: {
             Label("Settings", systemImage: "gearshape")
         }
-        .disabled(true)
 
         Divider()
 
@@ -58,5 +66,15 @@ struct MenuBarContentView: View {
         } label: {
             Label("Quit ClearshotX", systemImage: "power")
         }
+    }
+
+    private func title(_ baseTitle: String, action: GlobalHotkeyAction) -> String {
+        let shortcut = viewModel.shortcutLabel(for: action)
+
+        guard !shortcut.isEmpty else {
+            return baseTitle
+        }
+
+        return "\(baseTitle) (\(shortcut))"
     }
 }
