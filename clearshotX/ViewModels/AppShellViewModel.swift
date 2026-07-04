@@ -26,6 +26,8 @@ final class AppShellViewModel: ObservableObject {
     private let hotkeyConflictResolutionManager: HotkeyConflictResolutionManager
     private let hotkeySetupWindowManager: HotkeySetupWindowManager
     private let settingsWindowManager: SettingsWindowManager
+    private let menuBarStatusItemManager: MenuBarStatusItemManager
+    private let menuBarReadyHintManager: MenuBarReadyHintManager
     private let alertPresenter: AlertPresenter
 
     private var appDidFinishLaunchingObserver: NSObjectProtocol?
@@ -41,6 +43,8 @@ final class AppShellViewModel: ObservableObject {
         hotkeyConflictResolutionManager: HotkeyConflictResolutionManager? = nil,
         hotkeySetupWindowManager: HotkeySetupWindowManager? = nil,
         settingsWindowManager: SettingsWindowManager? = nil,
+        menuBarStatusItemManager: MenuBarStatusItemManager? = nil,
+        menuBarReadyHintManager: MenuBarReadyHintManager? = nil,
         alertPresenter: AlertPresenter? = nil
     ) {
         self.screenCaptureService = screenCaptureService ?? ScreenCaptureService()
@@ -52,8 +56,11 @@ final class AppShellViewModel: ObservableObject {
         self.hotkeyConflictResolutionManager = hotkeyConflictResolutionManager ?? HotkeyConflictResolutionManager()
         self.hotkeySetupWindowManager = hotkeySetupWindowManager ?? HotkeySetupWindowManager()
         self.settingsWindowManager = settingsWindowManager ?? SettingsWindowManager()
+        self.menuBarStatusItemManager = menuBarStatusItemManager ?? MenuBarStatusItemManager()
+        self.menuBarReadyHintManager = menuBarReadyHintManager ?? MenuBarReadyHintManager()
         self.alertPresenter = alertPresenter ?? AlertPresenter()
 
+        self.menuBarStatusItemManager.configure(viewModel: self)
         observeAppActivation()
         configureGlobalHotkeysAfterLaunch()
     }
@@ -187,6 +194,7 @@ final class AppShellViewModel: ObservableObject {
                 }
             )
             activeHotkeyMode = hotkeyConflictResolutionManager.activeMode
+            menuBarStatusItemManager.hide()
             showHotkeyResolutionFlow(context: .firstRun)
         }
     }
@@ -224,8 +232,10 @@ final class AppShellViewModel: ObservableObject {
 
         switch presentation {
         case .none:
+            menuBarStatusItemManager.show()
             break
         case .presentOnboarding:
+            menuBarStatusItemManager.hide()
             showHotkeyResolutionFlow(context: .firstRun)
         }
     }
@@ -272,6 +282,15 @@ final class AppShellViewModel: ObservableObject {
                 guard let self else { return }
                 self.activeHotkeyMode = self.hotkeyConflictResolutionManager.activeMode
                 self.hotkeySetupWindowManager.close()
+
+                if context == .firstRun {
+                    self.menuBarStatusItemManager.show { [weak self] statusItemButton, statusItemFrame in
+                        self?.menuBarReadyHintManager.showReadyHint(
+                            attachedTo: statusItemButton,
+                            pointingTo: statusItemFrame
+                        )
+                    }
+                }
             }
         )
 

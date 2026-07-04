@@ -13,9 +13,11 @@ struct clearshotXApp: App {
     @StateObject private var viewModel = AppShellViewModel()
 
     var body: some Scene {
-        MenuBarExtra("ClearshotX", systemImage: "camera.viewfinder") {
-            MenuBarContentView(viewModel: viewModel)
+        Settings {
+            EmptyView()
+                .onAppear {
+                    _ = viewModel.activeHotkeyMode
+                }
         }
-        .menuBarExtraStyle(.menu)
     }
 }
