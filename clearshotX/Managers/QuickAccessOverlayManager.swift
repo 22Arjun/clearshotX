@@ -20,6 +20,7 @@ final class QuickAccessOverlayManager {
     private let screenBottomMargin: CGFloat = 55
     private let slideDistance: CGFloat = 14
     private let dismissDelay: TimeInterval = 5
+    private let pinnedPanelSpacing: CGFloat = 14
 
     private var panelSize: NSSize {
         NSSize(
@@ -31,7 +32,7 @@ final class QuickAccessOverlayManager {
     private var panel: QuickAccessPanel?
     private var dismissWorkItem: DispatchWorkItem?
     private var currentCapture: CaptureResult?
-    private var pinnedPanels: [NSPanel] = []
+    private var pinnedPanels: [PinnedPanel] = []
 
     func show(
         capture: CaptureResult,
@@ -221,12 +222,15 @@ final class QuickAccessOverlayManager {
 
     private func pin(_ capture: CaptureResult) {
         let size = pinnedSize(for: capture)
-        let sourceFrame = panel?.frame ?? overlayFrame(for: capture)
-        let frame = NSRect(
-            x: sourceFrame.maxX - size.width,
-            y: sourceFrame.maxY + 12,
-            width: size.width,
-            height: size.height
+        guard let thumbnail = pinnedImage(for: capture, size: size) else {
+            NSSound.beep()
+            return
+        }
+
+        let frame = pinnedFrame(
+            size: size,
+            sourceFrame: panel?.frame ?? overlayFrame(for: capture),
+            screenFrame: capture.screenFrame
         )
 
         let panel = QuickAccessPanel(
@@ -244,18 +248,22 @@ final class QuickAccessOverlayManager {
         panel.isReleasedWhenClosed = false
         panel.level = .floating
 
-        panel.contentView = TransparentHostingView(
-            rootView: PinnedCaptureView(capture: capture) { [weak self, weak panel] in
+        let hostingView = TransparentHostingView(
+            rootView: PinnedCaptureView(image: thumbnail) { [weak self, weak panel] in
                 guard let panel else {
                     return
                 }
 
                 panel.orderOut(nil)
-                self?.pinnedPanels.removeAll { $0 === panel }
+                self?.pinnedPanels.removeAll { $0.panel === panel }
             }
         )
+        hostingView.frame = NSRect(origin: .zero, size: size)
+        hostingView.autoresizingMask = [.width, .height]
+        panel.contentView = hostingView
+        panel.setContentSize(size)
 
-        pinnedPanels.append(panel)
+        pinnedPanels.append(PinnedPanel(panel: panel))
         panel.alphaValue = 0
         panel.orderFrontRegardless()
 
@@ -293,6 +301,51 @@ final class QuickAccessOverlayManager {
             height: max(120, imageSize.height * scale)
         )
     }
+
+    private func pinnedFrame(
+        size: NSSize,
+        sourceFrame: NSRect,
+        screenFrame: CGRect
+    ) -> NSRect {
+        let screen = screen(for: screenFrame) ?? NSScreen.main
+        let visibleFrame = screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? sourceFrame
+        let offset = CGFloat(pinnedPanels.count % 8) * pinnedPanelSpacing
+
+        let proposedFrame = NSRect(
+            x: sourceFrame.maxX - size.width + offset,
+            y: sourceFrame.maxY + 12 - offset,
+            width: size.width,
+            height: size.height
+        )
+
+        return proposedFrame.clamped(to: visibleFrame, padding: 12)
+    }
+
+    private func pinnedImage(for capture: CaptureResult, size: NSSize) -> NSImage? {
+        guard size.width > 0, size.height > 0 else {
+            return nil
+        }
+
+        let thumbnail = NSImage(size: size)
+        thumbnail.lockFocus()
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        capture.image.draw(
+            in: NSRect(origin: .zero, size: size),
+            from: .zero,
+            operation: .copy,
+            fraction: 1,
+            respectFlipped: true,
+            hints: [.interpolation: NSImageInterpolation.high]
+        )
+        thumbnail.unlockFocus()
+        return thumbnail
+    }
+}
+
+private struct PinnedPanel {
+    let id = UUID()
+    let panel: NSPanel
 }
 
 private final class QuickAccessPanel: NSPanel {
@@ -346,12 +399,12 @@ private final class TransparentHostingView<Content: View>: NSHostingView<Content
 }
 
 private struct PinnedCaptureView: View {
-    let capture: CaptureResult
+    let image: NSImage
     let onClose: () -> Void
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            Image(nsImage: capture.image)
+            Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
                 .background(.black.opacity(0.08))
@@ -382,5 +435,23 @@ private extension CGRect {
         }
 
         return max(0, width) * max(0, height)
+    }
+
+    func clamped(to bounds: CGRect, padding: CGFloat) -> CGRect {
+        guard !bounds.isNull, !bounds.isInfinite else {
+            return self
+        }
+
+        let maxX = bounds.maxX - width - padding
+        let maxY = bounds.maxY - height - padding
+        let minX = bounds.minX + padding
+        let minY = bounds.minY + padding
+
+        return CGRect(
+            x: min(max(origin.x, minX), maxX),
+            y: min(max(origin.y, minY), maxY),
+            width: width,
+            height: height
+        )
     }
 }
