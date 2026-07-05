@@ -73,6 +73,8 @@ private struct EditorToolbarView: View {
                 .disabled(!viewModel.isEnabled(action))
                 .help("\(action.title) (\(action.shortcutHint))")
                 .editorKeyboardShortcut(for: action)
+                .accessibilityLabel(action.title)
+                .accessibilityHint("Shortcut \(action.shortcutHint)")
             }
         }
         .toolbarGroupChrome()
@@ -112,6 +114,7 @@ private struct EditorToolbarView: View {
                 }
                 .buttonStyle(EditorPaletteButtonStyle(isSelected: viewModel.isStrokeColorSelected(option)))
                 .help("Stroke Color: \(option.name)")
+                .accessibilityLabel("Stroke Color \(option.name)")
             }
         }
         .toolbarGroupChrome()
@@ -144,6 +147,7 @@ private struct EditorToolbarView: View {
                 }
                 .buttonStyle(EditorPaletteButtonStyle(isSelected: viewModel.isStrokeWidthSelected(width)))
                 .help(viewModel.activeTool == .blurPixelate ? "Pixelate Strength: \(Int(width))" : "Stroke Width: \(Int(width))")
+                .accessibilityLabel(viewModel.activeTool == .blurPixelate ? "Pixelate Strength \(Int(width))" : "Stroke Width \(Int(width))")
             }
         }
         .toolbarGroupChrome()
@@ -177,6 +181,8 @@ private struct EditorToolbarView: View {
         }
         .menuStyle(.borderlessButton)
         .help("Text Size: \(Int(viewModel.selectedTextSize)) pt")
+        .accessibilityLabel("Text Size")
+        .accessibilityValue("\(Int(viewModel.selectedTextSize)) points")
         .toolbarGroupChrome()
     }
 
@@ -208,6 +214,8 @@ private struct EditorToolbarView: View {
         }
         .menuStyle(.borderlessButton)
         .help("Opacity: \(Int(viewModel.selectedOpacity * 100))%")
+        .accessibilityLabel("Opacity")
+        .accessibilityValue("\(Int(viewModel.selectedOpacity * 100)) percent")
         .toolbarGroupChrome()
     }
 }
@@ -330,6 +338,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
 
     private weak var viewModel: EditorViewModel?
     private var currentImage: NSImage?
+    private var currentCGImage: CGImage?
     private var annotationObjects: [AnnotationObject] = []
     private var draftAnnotationObject: AnnotationObject?
     private var selectedAnnotationID: UUID?
@@ -481,6 +490,12 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
                     viewModel.redo()
                     refreshFromViewModel()
                     return
+                case "c":
+                    viewModel.perform(.copy)
+                    return
+                case "s":
+                    viewModel.perform(.save)
+                    return
                 default:
                     break
                 }
@@ -507,12 +522,15 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         activeTool: EditorTool?
     ) {
         self.viewModel = viewModel
-        currentImage = image
+        if currentImage !== image {
+            currentImage = image
+            currentCGImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            imageLayer.contents = currentCGImage
+        }
         self.annotationObjects = annotationObjects
         self.draftAnnotationObject = draftAnnotationObject
         self.selectedAnnotationID = selectedAnnotationID
         self.activeTool = activeTool
-        imageLayer.contents = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         removeTextEditorIfAnnotationDisappeared()
         renderAnnotationLayers()
         needsLayout = true
@@ -805,7 +823,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
             annotations: visibleAnnotations,
             draftAnnotation: draftAnnotationObject,
             selectedAnnotationID: selectedAnnotationID,
-            sourceImage: currentImage?.cgImage(forProposedRect: nil, context: nil, hints: nil),
+            sourceImage: currentCGImage,
             in: annotationContainerLayer,
             contentsScale: currentLayerScale,
             selectionHandleSize: max(8, 8 / imageDisplayScale)
@@ -977,8 +995,10 @@ private extension View {
             keyboardShortcut("z", modifiers: [.command])
         case .redo:
             keyboardShortcut("z", modifiers: [.command, .shift])
-        case .copy, .save:
-            self
+        case .copy:
+            keyboardShortcut("c", modifiers: [.command])
+        case .save:
+            keyboardShortcut("s", modifiers: [.command])
         }
     }
 }

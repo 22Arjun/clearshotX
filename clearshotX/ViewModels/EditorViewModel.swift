@@ -113,9 +113,9 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         case .redo:
             "⇧⌘Z"
         case .copy:
-            "C"
+            "⌘C"
         case .save:
-            "S"
+            "⌘S"
         }
     }
 
@@ -189,6 +189,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var canRedo = false
 
     private let annotationInteractionService: AnnotationInteractionServicing
+    private let outputService: EditorOutputServicing
     private var activeDragSession: EditorDragSession?
     private var textEditingInitialState: EditorHistoryState?
     private var undoStack: [EditorHistoryState] = []
@@ -204,11 +205,13 @@ final class EditorViewModel: ObservableObject {
     init(
         image: NSImage,
         sourceFileURL: URL? = nil,
-        annotationInteractionService: AnnotationInteractionServicing? = nil
+        annotationInteractionService: AnnotationInteractionServicing? = nil,
+        outputService: EditorOutputServicing? = nil
     ) {
         self.image = image
         self.sourceFileURL = sourceFileURL
         self.annotationInteractionService = annotationInteractionService ?? AnnotationInteractionService()
+        self.outputService = outputService ?? EditorOutputService()
     }
 
     func perform(_ action: EditorToolbarAction) {
@@ -561,15 +564,11 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func copy() {
-        logStub("Copy requested")
+        outputService.copy(image: image, annotations: annotationObjects)
     }
 
     private func save() {
-        logStub("Save requested")
-    }
-
-    private func logStub(_ message: String) {
-        print("ClearshotX Editor stub: \(message)")
+        outputService.save(image: image, sourceFileURL: sourceFileURL, annotations: annotationObjects)
     }
 
     private func selectTool(_ tool: EditorTool) {

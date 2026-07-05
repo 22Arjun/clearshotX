@@ -8,9 +8,10 @@
 import AppKit
 
 final class ClipboardService {
-    func copy(_ image: NSImage) {
+    @discardableResult
+    func copy(_ image: NSImage) -> Bool {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.writeObjects([image])
+        return pasteboard.writeObjects([image])
     }
 }
