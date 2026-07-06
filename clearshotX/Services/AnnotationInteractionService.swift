@@ -87,7 +87,7 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
                 ),
                 style: style
             )
-        case .text:
+        case .text, .crop:
             return nil
         }
     }

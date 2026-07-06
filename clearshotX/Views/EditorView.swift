@@ -21,6 +21,8 @@ struct EditorView: View {
                 image: viewModel.image,
                 annotationObjects: viewModel.annotationObjects,
                 draftAnnotationObject: viewModel.draftAnnotationObject,
+                draftCropRect: viewModel.draftCropRect,
+                isCropGridVisible: viewModel.isCropGridVisible,
                 selectedAnnotationID: viewModel.selectedAnnotationID,
                 activeTool: viewModel.activeTool
             )
@@ -35,14 +37,11 @@ private struct EditorToolbarView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            toolButtonGroup(EditorToolbarAction.drawingTools)
-            colorPalette
-            strokeWidthPicker
-            textSizeMenu
-            opacityMenu
-            Spacer(minLength: 12)
-            toolButtonGroup(EditorToolbarAction.historyCommands)
-            toolButtonGroup(EditorToolbarAction.outputCommands)
+            if viewModel.isCropModeActive {
+                cropToolbarContent
+            } else {
+                annotationToolbarContent
+            }
         }
         .padding(.horizontal, 16)
         .frame(height: 62)
@@ -54,6 +53,29 @@ private struct EditorToolbarView: View {
                         .fill(Color(nsColor: .separatorColor).opacity(0.72))
                         .frame(height: 1)
                 }
+        }
+    }
+
+    private var annotationToolbarContent: some View {
+        Group {
+            toolButtonGroup(EditorToolbarAction.drawingTools)
+            colorPalette
+            strokeWidthPicker
+            textSizeMenu
+            opacityMenu
+            Spacer(minLength: 12)
+            toolButtonGroup(EditorToolbarAction.historyCommands)
+            toolButtonGroup(EditorToolbarAction.outputCommands)
+        }
+    }
+
+    private var cropToolbarContent: some View {
+        Group {
+            cropRatioMenu
+            cropModeButtonGroup
+            Spacer(minLength: 12)
+            toolButtonGroup(EditorToolbarAction.historyCommands)
+            toolButtonGroup(EditorToolbarAction.outputCommands)
         }
     }
 
@@ -76,6 +98,82 @@ private struct EditorToolbarView: View {
                 .accessibilityLabel(action.title)
                 .accessibilityHint("Shortcut \(action.shortcutHint)")
             }
+        }
+        .toolbarGroupChrome()
+    }
+
+    private var cropRatioMenu: some View {
+        Menu {
+            Text("Custom Ratio")
+
+            Button {
+                viewModel.setCropRatio(EditorViewModel.cropRatioOptions[0])
+            } label: {
+                cropRatioMenuItem(EditorViewModel.cropRatioOptions[0])
+            }
+
+            Divider()
+
+            ForEach(EditorViewModel.cropRatioOptions.dropFirst()) { option in
+                Button {
+                    viewModel.setCropRatio(option)
+                } label: {
+                    cropRatioMenuItem(option)
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "aspectratio")
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+
+                Text(viewModel.selectedCropRatioTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .frame(minWidth: 96, alignment: .leading)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            }
+            .foregroundStyle(Color(nsColor: .labelColor).opacity(0.9))
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .help("Crop Ratio: \(viewModel.selectedCropRatioTitle)")
+        .accessibilityLabel("Crop Ratio")
+        .accessibilityValue(viewModel.selectedCropRatioTitle)
+        .toolbarGroupChrome()
+    }
+
+    private func cropRatioMenuItem(_ option: EditorCropRatioOption) -> some View {
+        HStack {
+            if viewModel.isCropRatioSelected(option) {
+                Image(systemName: "checkmark")
+            }
+
+            Text(option.title)
+        }
+    }
+
+    private var cropModeButtonGroup: some View {
+        HStack(spacing: 3) {
+            Button {
+                viewModel.perform(.crop)
+            } label: {
+                Image(systemName: EditorToolbarAction.crop.systemImageName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 34, height: 34)
+                    .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            }
+            .buttonStyle(EditorToolbarButtonStyle(isSelected: true))
+            .help("Crop/Resize Canvas (\(EditorToolbarAction.crop.shortcutHint))")
+            .editorKeyboardShortcut(for: .crop)
+            .accessibilityLabel("Crop Resize Canvas")
+            .accessibilityHint("Adjust the crop frame on the image")
         }
         .toolbarGroupChrome()
     }
@@ -302,6 +400,8 @@ private struct EditorCanvasView: NSViewRepresentable {
     let image: NSImage
     let annotationObjects: [AnnotationObject]
     let draftAnnotationObject: AnnotationObject?
+    let draftCropRect: CGRect?
+    let isCropGridVisible: Bool
     let selectedAnnotationID: UUID?
     let activeTool: EditorTool?
 
@@ -312,6 +412,8 @@ private struct EditorCanvasView: NSViewRepresentable {
             image: image,
             annotationObjects: annotationObjects,
             draftAnnotationObject: draftAnnotationObject,
+            draftCropRect: draftCropRect,
+            isCropGridVisible: isCropGridVisible,
             selectedAnnotationID: selectedAnnotationID,
             activeTool: activeTool
         )
@@ -324,6 +426,8 @@ private struct EditorCanvasView: NSViewRepresentable {
             image: image,
             annotationObjects: annotationObjects,
             draftAnnotationObject: draftAnnotationObject,
+            draftCropRect: draftCropRect,
+            isCropGridVisible: isCropGridVisible,
             selectedAnnotationID: selectedAnnotationID,
             activeTool: activeTool
         )
@@ -334,13 +438,21 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private let imageContainerLayer = CALayer()
     private let imageLayer = CALayer()
     private let annotationContainerLayer = CALayer()
+    private let cropOverlayLayer = CAShapeLayer()
+    private let cropActionBar = NSVisualEffectView()
+    private let cropCancelButton = CropActionButton(title: "Cancel", target: nil, action: nil)
+    private let cropApplyButton = CropActionButton(title: "Crop", target: nil, action: nil)
     private let annotationLayerRenderer = AnnotationLayerRenderer()
+    private static let northWestSouthEastResizeCursor = makeDiagonalResizeCursor(kind: .northWestSouthEast)
+    private static let northEastSouthWestResizeCursor = makeDiagonalResizeCursor(kind: .northEastSouthWest)
 
     private weak var viewModel: EditorViewModel?
     private var currentImage: NSImage?
     private var currentCGImage: CGImage?
     private var annotationObjects: [AnnotationObject] = []
     private var draftAnnotationObject: AnnotationObject?
+    private var draftCropRect: CGRect?
+    private var isCropGridVisible = false
     private var selectedAnnotationID: UUID?
     private var activeTool: EditorTool?
     private var imageFrameInView: CGRect = .zero
@@ -353,6 +465,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupLayers()
+        setupCropActionBar()
     }
 
     @available(*, unavailable)
@@ -383,6 +496,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         super.layout()
         layoutCanvasLayers()
         updateActiveTextEditorFrame()
+        layoutCropActionBar()
     }
 
     override func updateTrackingAreas() {
@@ -406,7 +520,18 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        cursor(for: imagePoint(from: event, clamped: false)).set()
+        let viewPoint = convert(event.locationInWindow, from: nil)
+
+        if cropActionButtonContains(viewPoint) {
+            NSCursor.pointingHand.set()
+            return
+        }
+
+        if activeTool == .crop {
+            cursorForCropFrame(at: cropPoint(from: viewPoint)).set()
+        } else {
+            cursor(for: imagePoint(from: viewPoint, clamped: false)).set()
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -414,6 +539,23 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
 
         if activeTextView != nil {
             finishActiveTextEditing()
+        }
+
+        if activeTool == .crop {
+            guard let point = cropPoint(from: event),
+                  let viewModel
+            else {
+                viewModel?.deselectAnnotation()
+                renderAnnotationLayers()
+                return
+            }
+
+            viewModel.beginCropFrameInteraction(
+                at: point,
+                hitResult: cropFrameHitResult(at: point)
+            )
+            refreshFromViewModel()
+            return
         }
 
         guard let point = imagePoint(from: event, clamped: false),
@@ -438,13 +580,22 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let point = imagePoint(from: event, clamped: true),
+        let eventPoint = activeTool == .crop ? cropPoint(from: event) : imagePoint(from: event, clamped: true)
+
+        guard let point = eventPoint,
               let viewModel
         else {
             return
         }
 
-        viewModel.updateCanvasInteraction(to: point)
+        if activeTool == .crop {
+            viewModel.updateCanvasInteraction(
+                to: point,
+                constrainingCropToOriginalRatio: event.modifierFlags.contains(.shift)
+            )
+        } else {
+            viewModel.updateCanvasInteraction(to: point)
+        }
         refreshFromViewModel()
     }
 
@@ -453,8 +604,17 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
             return
         }
 
-        if let point = imagePoint(from: event, clamped: true) {
-            viewModel.updateCanvasInteraction(to: point)
+        let eventPoint = activeTool == .crop ? cropPoint(from: event) : imagePoint(from: event, clamped: true)
+
+        if let point = eventPoint {
+            if activeTool == .crop {
+                viewModel.updateCanvasInteraction(
+                    to: point,
+                    constrainingCropToOriginalRatio: event.modifierFlags.contains(.shift)
+                )
+            } else {
+                viewModel.updateCanvasInteraction(to: point)
+            }
         }
 
         viewModel.endCanvasInteraction()
@@ -465,6 +625,21 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         guard let viewModel else {
             super.keyDown(with: event)
             return
+        }
+
+        if activeTool == .crop {
+            switch event.keyCode {
+            case 36, 76:
+                viewModel.applyCurrentCropFrame()
+                refreshFromViewModel()
+                return
+            case 53:
+                viewModel.cancelCropMode()
+                refreshFromViewModel()
+                return
+            default:
+                break
+            }
         }
 
         switch event.keyCode {
@@ -518,6 +693,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         image: NSImage,
         annotationObjects: [AnnotationObject],
         draftAnnotationObject: AnnotationObject?,
+        draftCropRect: CGRect?,
+        isCropGridVisible: Bool,
         selectedAnnotationID: UUID?,
         activeTool: EditorTool?
     ) {
@@ -529,10 +706,14 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         }
         self.annotationObjects = annotationObjects
         self.draftAnnotationObject = draftAnnotationObject
+        self.draftCropRect = draftCropRect
+        self.isCropGridVisible = isCropGridVisible
         self.selectedAnnotationID = selectedAnnotationID
         self.activeTool = activeTool
         removeTextEditorIfAnnotationDisappeared()
         renderAnnotationLayers()
+        renderCropOverlay()
+        layoutCropActionBar()
         needsLayout = true
     }
 
@@ -751,10 +932,56 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         annotationContainerLayer.cornerRadius = 10
         annotationContainerLayer.masksToBounds = true
 
+        cropOverlayLayer.name = "CropOverlayLayer"
+        cropOverlayLayer.fillColor = NSColor.black.withAlphaComponent(0.38).cgColor
+        cropOverlayLayer.strokeColor = NSColor.clear.cgColor
+        cropOverlayLayer.fillRule = .evenOdd
+        cropOverlayLayer.allowsEdgeAntialiasing = true
+        cropOverlayLayer.isHidden = true
+
         layer?.addSublayer(imageContainerLayer)
         imageContainerLayer.addSublayer(imageLayer)
         imageContainerLayer.addSublayer(annotationContainerLayer)
+        imageContainerLayer.addSublayer(cropOverlayLayer)
         updateLayerScale()
+    }
+
+    private func setupCropActionBar() {
+        cropActionBar.blendingMode = .withinWindow
+        cropActionBar.material = .hudWindow
+        cropActionBar.state = .active
+        cropActionBar.wantsLayer = true
+        cropActionBar.layer?.cornerRadius = 9
+        cropActionBar.layer?.masksToBounds = true
+        cropActionBar.isHidden = true
+
+        configureCropActionButton(cropCancelButton, title: "Cancel", action: #selector(cancelCropFromActionBar))
+        configureCropActionButton(cropApplyButton, title: "Crop", action: #selector(applyCropFromActionBar))
+
+        cropActionBar.addSubview(cropCancelButton)
+        cropActionBar.addSubview(cropApplyButton)
+        addSubview(cropActionBar)
+    }
+
+    private func configureCropActionButton(_ button: NSButton, title: String, action: Selector) {
+        button.title = title
+        button.target = self
+        button.action = action
+        button.bezelStyle = .rounded
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: 12, weight: .semibold)
+        button.setButtonType(.momentaryPushIn)
+        button.isBordered = true
+    }
+
+    @objc private func cancelCropFromActionBar() {
+        viewModel?.cancelCropMode()
+        refreshFromViewModel()
+    }
+
+    @objc private func applyCropFromActionBar() {
+        viewModel?.applyCurrentCropFrame()
+        refreshFromViewModel()
     }
 
     private func layoutCanvasLayers() {
@@ -762,6 +989,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
             imageContainerLayer.frame = .zero
             imageFrameInView = .zero
             imageDisplayScale = 1
+            cropOverlayLayer.isHidden = true
+            cropActionBar.isHidden = true
             return
         }
 
@@ -789,6 +1018,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         )
         imageLayer.frame = imageContainerLayer.bounds
         annotationContainerLayer.frame = imageContainerLayer.bounds
+        cropOverlayLayer.frame = imageContainerLayer.bounds
         imageContainerLayer.shadowPath = CGPath(
             roundedRect: imageContainerLayer.bounds,
             cornerWidth: 10,
@@ -798,6 +1028,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         CATransaction.commit()
 
         renderAnnotationLayers()
+        renderCropOverlay()
     }
 
     private func refreshFromViewModel() {
@@ -807,9 +1038,12 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
 
         annotationObjects = viewModel.annotationObjects
         draftAnnotationObject = viewModel.draftAnnotationObject
+        draftCropRect = viewModel.draftCropRect
+        isCropGridVisible = viewModel.isCropGridVisible
         selectedAnnotationID = viewModel.selectedAnnotationID
         activeTool = viewModel.activeTool
         renderAnnotationLayers()
+        renderCropOverlay()
         updateActiveTextEditorFrame()
         cursor(for: nil).set()
     }
@@ -830,11 +1064,172 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         )
     }
 
+    private func renderCropOverlay() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        guard let draftCropRect,
+              draftCropRect.width >= 1,
+              draftCropRect.height >= 1
+        else {
+            cropOverlayLayer.path = nil
+            cropOverlayLayer.sublayers = nil
+            cropOverlayLayer.isHidden = true
+            cropActionBar.isHidden = true
+            CATransaction.commit()
+            return
+        }
+
+        let cropRect = draftCropRect
+            .standardizedForEditor
+            .intersection(imageContainerLayer.bounds)
+
+        cropOverlayLayer.isHidden = false
+        cropOverlayLayer.frame = imageContainerLayer.bounds
+        cropOverlayLayer.path = cropDimmingPath(for: cropRect, in: imageContainerLayer.bounds)
+        cropOverlayLayer.contentsScale = currentLayerScale
+        cropOverlayLayer.sublayers = cropFrameDecorationLayers(for: cropRect)
+        CATransaction.commit()
+        layoutCropActionBar()
+    }
+
+    private func cropDimmingPath(for cropRect: CGRect, in bounds: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        path.addRect(cropRect)
+        return path
+    }
+
+    private func cropFrameDecorationLayers(for cropRect: CGRect) -> [CALayer] {
+        var layers: [CALayer] = [cropBorderLayer(for: cropRect)]
+
+        if isCropGridVisible {
+            layers.append(cropGridLayer(for: cropRect))
+        }
+
+        layers.append(contentsOf: cropHandleLayers(for: cropRect))
+        return layers
+    }
+
+    private func layoutCropActionBar() {
+        guard activeTool == .crop,
+              let draftCropRect,
+              draftCropRect.width >= 1,
+              draftCropRect.height >= 1,
+              imageFrameInView.width > 0,
+              imageFrameInView.height > 0
+        else {
+            cropActionBar.isHidden = true
+            return
+        }
+
+        let cropViewRect = viewRect(forImageRect: draftCropRect.standardizedForEditor)
+        let barSize = CGSize(width: 130, height: 34)
+        let gap: CGFloat = 10
+        let inset: CGFloat = 10
+        let preferredY = cropViewRect.maxY + gap
+        let fallbackY = cropViewRect.minY - barSize.height - gap
+        let y = preferredY + barSize.height <= bounds.maxY - inset
+            ? preferredY
+            : max(bounds.minY + inset, fallbackY)
+        let unclampedX = cropViewRect.midX - barSize.width / 2
+        let x = min(max(unclampedX, bounds.minX + inset), bounds.maxX - barSize.width - inset)
+
+        cropActionBar.frame = CGRect(origin: CGPoint(x: x, y: y), size: barSize)
+        cropCancelButton.frame = CGRect(x: 7, y: 5, width: 60, height: 24)
+        cropApplyButton.frame = CGRect(x: 70, y: 5, width: 53, height: 24)
+        cropActionBar.isHidden = false
+    }
+
+    private func cropActionButtonContains(_ point: CGPoint) -> Bool {
+        guard !cropActionBar.isHidden else {
+            return false
+        }
+
+        let pointInActionBar = cropActionBar.convert(point, from: self)
+        return cropCancelButton.frame.contains(pointInActionBar) ||
+            cropApplyButton.frame.contains(pointInActionBar)
+    }
+
+    private func cropBorderLayer(for rect: CGRect) -> CALayer {
+        let layer = CAShapeLayer()
+        layer.frame = imageContainerLayer.bounds
+        layer.path = cropFramePath(for: rect)
+        layer.fillColor = NSColor.clear.cgColor
+        layer.strokeColor = NSColor.white.cgColor
+        layer.lineWidth = max(1.5, 1.5 / imageDisplayScale)
+        layer.lineJoin = .round
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOpacity = 0.35
+        layer.shadowRadius = 4 / max(imageDisplayScale, 0.1)
+        layer.shadowOffset = CGSize(width: 0, height: 1 / max(imageDisplayScale, 0.1))
+        layer.contentsScale = currentLayerScale
+        return layer
+    }
+
+    private func cropGridLayer(for rect: CGRect) -> CALayer {
+        let layer = CAShapeLayer()
+        layer.frame = imageContainerLayer.bounds
+        layer.path = cropGridPath(for: rect)
+        layer.fillColor = NSColor.clear.cgColor
+        layer.strokeColor = NSColor.white.withAlphaComponent(0.42).cgColor
+        layer.lineWidth = max(0.8, 0.8 / imageDisplayScale)
+        layer.contentsScale = currentLayerScale
+        return layer
+    }
+
+    private func cropFramePath(for rect: CGRect) -> CGPath {
+        CGPath(rect: rect, transform: nil)
+    }
+
+    private func cropGridPath(for rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
+        let firstVertical = rect.minX + rect.width / 3
+        let secondVertical = rect.minX + rect.width * 2 / 3
+        let firstHorizontal = rect.minY + rect.height / 3
+        let secondHorizontal = rect.minY + rect.height * 2 / 3
+
+        path.move(to: CGPoint(x: firstVertical, y: rect.minY))
+        path.addLine(to: CGPoint(x: firstVertical, y: rect.maxY))
+        path.move(to: CGPoint(x: secondVertical, y: rect.minY))
+        path.addLine(to: CGPoint(x: secondVertical, y: rect.maxY))
+        path.move(to: CGPoint(x: rect.minX, y: firstHorizontal))
+        path.addLine(to: CGPoint(x: rect.maxX, y: firstHorizontal))
+        path.move(to: CGPoint(x: rect.minX, y: secondHorizontal))
+        path.addLine(to: CGPoint(x: rect.maxX, y: secondHorizontal))
+
+        return path
+    }
+
+    private func cropHandleLayers(for cropRect: CGRect) -> [CALayer] {
+        EditorCropFrameHandle.allCases.map { handle in
+            let displayRect = cropHandleVisualRect(for: handle, cropRect: cropRect)
+            let layer = CAShapeLayer()
+            layer.frame = imageContainerLayer.bounds
+            layer.path = CGPath(
+                roundedRect: displayRect,
+                cornerWidth: min(displayRect.width, displayRect.height) / 2,
+                cornerHeight: min(displayRect.width, displayRect.height) / 2,
+                transform: nil
+            )
+            layer.fillColor = NSColor.white.cgColor
+            layer.strokeColor = NSColor.black.withAlphaComponent(0.28).cgColor
+            layer.lineWidth = max(0.8, 0.8 / imageDisplayScale)
+            layer.shadowColor = NSColor.black.cgColor
+            layer.shadowOpacity = 0.25
+            layer.shadowRadius = 3 / max(imageDisplayScale, 0.1)
+            layer.shadowOffset = CGSize(width: 0, height: 1 / max(imageDisplayScale, 0.1))
+            layer.contentsScale = currentLayerScale
+            return layer
+        }
+    }
+
     private func updateLayerScale() {
         layer?.contentsScale = currentLayerScale
         imageContainerLayer.contentsScale = currentLayerScale
         imageLayer.contentsScale = currentLayerScale
         annotationContainerLayer.contentsScale = currentLayerScale
+        cropOverlayLayer.contentsScale = currentLayerScale
     }
 
     private var currentLayerScale: CGFloat {
@@ -845,8 +1240,158 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         max(6, 10 / imageDisplayScale)
     }
 
+    private var cropHandleSize: CGFloat {
+        max(14, 16 / imageDisplayScale)
+    }
+
+    private func cropFrameHitResult(at point: CGPoint) -> EditorCropFrameHitResult {
+        guard let cropRect = draftCropRect?.standardizedForEditor else {
+            return .empty
+        }
+
+        for (handle, rect) in cropFrameHandles(for: cropRect) where rect.contains(point) {
+            return .resize(handle)
+        }
+
+        if cropRect.insetBy(dx: -hitTestTolerance, dy: -hitTestTolerance).contains(point) {
+            return .move
+        }
+
+        return .empty
+    }
+
+    private func cropFrameHandles(for cropRect: CGRect) -> [EditorCropFrameHandle: CGRect] {
+        [
+            .topLeft: handleRect(centeredAt: CGPoint(x: cropRect.minX, y: cropRect.minY), size: cropHandleSize),
+            .top: handleRect(centeredAt: CGPoint(x: cropRect.midX, y: cropRect.minY), size: cropHandleSize),
+            .topRight: handleRect(centeredAt: CGPoint(x: cropRect.maxX, y: cropRect.minY), size: cropHandleSize),
+            .right: handleRect(centeredAt: CGPoint(x: cropRect.maxX, y: cropRect.midY), size: cropHandleSize),
+            .bottomRight: handleRect(centeredAt: CGPoint(x: cropRect.maxX, y: cropRect.maxY), size: cropHandleSize),
+            .bottom: handleRect(centeredAt: CGPoint(x: cropRect.midX, y: cropRect.maxY), size: cropHandleSize),
+            .bottomLeft: handleRect(centeredAt: CGPoint(x: cropRect.minX, y: cropRect.maxY), size: cropHandleSize),
+            .left: handleRect(centeredAt: CGPoint(x: cropRect.minX, y: cropRect.midY), size: cropHandleSize)
+        ]
+    }
+
+    private func cropHandleVisualRect(for handle: EditorCropFrameHandle, cropRect: CGRect) -> CGRect {
+        let shortSide = max(5, 6 / imageDisplayScale)
+        let longSide = max(18, 24 / imageDisplayScale)
+        let cornerSide = max(8, 10 / imageDisplayScale)
+
+        switch handle {
+        case .topLeft:
+            return handleRect(centeredAt: CGPoint(x: cropRect.minX, y: cropRect.minY), size: cornerSide)
+        case .top:
+            return CGRect(
+                x: cropRect.midX - longSide / 2,
+                y: cropRect.minY - shortSide / 2,
+                width: longSide,
+                height: shortSide
+            )
+        case .topRight:
+            return handleRect(centeredAt: CGPoint(x: cropRect.maxX, y: cropRect.minY), size: cornerSide)
+        case .right:
+            return CGRect(
+                x: cropRect.maxX - shortSide / 2,
+                y: cropRect.midY - longSide / 2,
+                width: shortSide,
+                height: longSide
+            )
+        case .bottomRight:
+            return handleRect(centeredAt: CGPoint(x: cropRect.maxX, y: cropRect.maxY), size: cornerSide)
+        case .bottom:
+            return CGRect(
+                x: cropRect.midX - longSide / 2,
+                y: cropRect.maxY - shortSide / 2,
+                width: longSide,
+                height: shortSide
+            )
+        case .bottomLeft:
+            return handleRect(centeredAt: CGPoint(x: cropRect.minX, y: cropRect.maxY), size: cornerSide)
+        case .left:
+            return CGRect(
+                x: cropRect.minX - shortSide / 2,
+                y: cropRect.midY - longSide / 2,
+                width: shortSide,
+                height: longSide
+            )
+        }
+    }
+
+    private func cursorForCropFrame(at point: CGPoint?) -> NSCursor {
+        guard let point else {
+            return .arrow
+        }
+
+        switch cropFrameHitResult(at: point) {
+        case let .resize(handle):
+            return cursor(forCropHandle: handle)
+        case .move:
+            return .openHand
+        case .empty:
+            return .crosshair
+        }
+    }
+
+    private func cursor(forCropHandle handle: EditorCropFrameHandle) -> NSCursor {
+        if #available(macOS 15.0, *) {
+            return .frameResize(position: frameResizePosition(for: handle), directions: .all)
+        }
+
+        switch handle {
+        case .left, .right:
+            return .resizeLeftRight
+        case .top, .bottom:
+            return .resizeUpDown
+        case .topLeft, .bottomRight:
+            return Self.northWestSouthEastResizeCursor
+        case .topRight, .bottomLeft:
+            return Self.northEastSouthWestResizeCursor
+        }
+    }
+
+    @available(macOS 15.0, *)
+    private func frameResizePosition(for handle: EditorCropFrameHandle) -> NSCursor.FrameResizePosition {
+        switch handle {
+        case .topLeft:
+            return .topLeft
+        case .top:
+            return .top
+        case .topRight:
+            return .topRight
+        case .right:
+            return .right
+        case .bottomRight:
+            return .bottomRight
+        case .bottom:
+            return .bottom
+        case .bottomLeft:
+            return .bottomLeft
+        case .left:
+            return .left
+        }
+    }
+
     private func imagePoint(from event: NSEvent, clamped: Bool) -> CGPoint? {
         imagePoint(from: convert(event.locationInWindow, from: nil), clamped: clamped)
+    }
+
+    private func cropPoint(from event: NSEvent) -> CGPoint? {
+        cropPoint(from: convert(event.locationInWindow, from: nil))
+    }
+
+    private func cropPoint(from viewPoint: CGPoint) -> CGPoint? {
+        guard imageFrameInView.width > 0,
+              imageFrameInView.height > 0,
+              imageDisplayScale > 0
+        else {
+            return nil
+        }
+
+        return CGPoint(
+            x: (viewPoint.x - imageFrameInView.minX) / imageDisplayScale,
+            y: (viewPoint.y - imageFrameInView.minY) / imageDisplayScale
+        )
     }
 
     private func imagePoint(from viewPoint: CGPoint, clamped: Bool) -> CGPoint? {
@@ -915,7 +1460,12 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     }
 
     private var drawingToolIsActive: Bool {
-        activeTool == .arrow || activeTool == .rectangle || activeTool == .oval || activeTool == .highlight || activeTool == .blurPixelate
+        activeTool == .arrow ||
+            activeTool == .rectangle ||
+            activeTool == .oval ||
+            activeTool == .highlight ||
+            activeTool == .blurPixelate ||
+            activeTool == .crop
     }
 }
 
@@ -931,6 +1481,119 @@ private final class AnnotationTextView: NSTextView {
 
         super.keyDown(with: event)
     }
+}
+
+private final class CropActionButton: NSButton {
+    private var cursorTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let cursorTrackingArea {
+            removeTrackingArea(cursorTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+            owner: self
+        )
+        addTrackingArea(trackingArea)
+        cursorTrackingArea = trackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
+private enum CropDiagonalResizeCursorKind {
+    case northWestSouthEast
+    case northEastSouthWest
+
+    var endpoints: (CGPoint, CGPoint) {
+        switch self {
+        case .northWestSouthEast:
+            return (CGPoint(x: 5, y: 19), CGPoint(x: 19, y: 5))
+        case .northEastSouthWest:
+            return (CGPoint(x: 19, y: 19), CGPoint(x: 5, y: 5))
+        }
+    }
+}
+
+private func makeDiagonalResizeCursor(kind: CropDiagonalResizeCursorKind) -> NSCursor {
+    let size = NSSize(width: 24, height: 24)
+    let image = NSImage(size: size)
+    let (startPoint, endPoint) = kind.endpoints
+
+    image.lockFocus()
+    drawDiagonalResizeCursorStroke(from: startPoint, to: endPoint, color: .white, lineWidth: 4.8, headLength: 6.4, headWidth: 5.4)
+    drawDiagonalResizeCursorStroke(from: startPoint, to: endPoint, color: .black, lineWidth: 2.4, headLength: 5.3, headWidth: 3.9)
+    image.unlockFocus()
+
+    return NSCursor(image: image, hotSpot: CGPoint(x: size.width / 2, y: size.height / 2))
+}
+
+private func drawDiagonalResizeCursorStroke(
+    from startPoint: CGPoint,
+    to endPoint: CGPoint,
+    color: NSColor,
+    lineWidth: CGFloat,
+    headLength: CGFloat,
+    headWidth: CGFloat
+) {
+    color.setStroke()
+    color.setFill()
+
+    let path = NSBezierPath()
+    path.lineWidth = lineWidth
+    path.lineCapStyle = .round
+    path.move(to: startPoint)
+    path.line(to: endPoint)
+    path.stroke()
+
+    drawCursorArrowhead(
+        tip: endPoint,
+        toward: startPoint,
+        length: headLength,
+        width: headWidth
+    )
+    drawCursorArrowhead(
+        tip: startPoint,
+        toward: endPoint,
+        length: headLength,
+        width: headWidth
+    )
+}
+
+private func drawCursorArrowhead(
+    tip: CGPoint,
+    toward oppositePoint: CGPoint,
+    length: CGFloat,
+    width: CGFloat
+) {
+    let dx = tip.x - oppositePoint.x
+    let dy = tip.y - oppositePoint.y
+    let magnitude = max(sqrt(dx * dx + dy * dy), 0.001)
+    let unit = CGPoint(x: dx / magnitude, y: dy / magnitude)
+    let perpendicular = CGPoint(x: -unit.y, y: unit.x)
+    let base = CGPoint(x: tip.x - unit.x * length, y: tip.y - unit.y * length)
+
+    let arrowhead = NSBezierPath()
+    arrowhead.move(to: tip)
+    arrowhead.line(to: CGPoint(x: base.x + perpendicular.x * width, y: base.y + perpendicular.y * width))
+    arrowhead.line(to: CGPoint(x: base.x - perpendicular.x * width, y: base.y - perpendicular.y * width))
+    arrowhead.close()
+    arrowhead.fill()
 }
 
 private extension NSImage {
@@ -975,6 +1638,15 @@ private extension CGPoint {
     }
 }
 
+private func handleRect(centeredAt point: CGPoint, size: CGFloat) -> CGRect {
+    CGRect(
+        x: point.x - size / 2,
+        y: point.y - size / 2,
+        width: size,
+        height: size
+    )
+}
+
 private extension View {
     @ViewBuilder
     func editorKeyboardShortcut(for action: EditorToolbarAction) -> some View {
@@ -991,6 +1663,8 @@ private extension View {
             keyboardShortcut("h", modifiers: [])
         case .blurPixelate:
             keyboardShortcut("b", modifiers: [])
+        case .crop:
+            keyboardShortcut("x", modifiers: [])
         case .undo:
             keyboardShortcut("z", modifiers: [.command])
         case .redo:
