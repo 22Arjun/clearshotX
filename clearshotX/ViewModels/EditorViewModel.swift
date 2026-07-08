@@ -310,6 +310,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var selectedArrowStyle: AnnotationArrowStyle = .fancy
     @Published private(set) var selectedTextSize: CGFloat = 24
     @Published private(set) var selectedOpacity: CGFloat = 1
+    @Published private(set) var selectedPixelateIntensity: CGFloat = 4
     @Published private(set) var selectedHighlightIntensity: CGFloat = 0.45
     @Published private(set) var selectedSpotlightShape: AnnotationSpotlightShape = .rectangle
     @Published private(set) var selectedCropRatioID = "freeform"
@@ -324,6 +325,7 @@ final class EditorViewModel: ObservableObject {
     private let canvasResizeService: EditorCanvasResizing
     private var activeDragSession: EditorDragSession?
     private var textEditingInitialState: EditorHistoryState?
+    private var pixelateIntensityEditingInitialState: EditorHistoryState?
     private var highlightIntensityEditingInitialState: EditorHistoryState?
     private var undoStack: [EditorHistoryState] = []
     private var redoStack: [EditorHistoryState] = []
@@ -356,6 +358,10 @@ final class EditorViewModel: ObservableObject {
 
     var shouldShowHighlightIntensitySlider: Bool {
         activeTool == .highlight || selectedAnnotation?.kind == .highlight
+    }
+
+    var shouldShowPixelateIntensitySlider: Bool {
+        activeTool == .blurPixelate || selectedAnnotation?.kind == .blurPixelate
     }
 
     var selectedSpotlightShapeTitle: String {
@@ -526,6 +532,35 @@ final class EditorViewModel: ObservableObject {
         if applyActiveStyleToSelectedAnnotation() {
             recordUndoState(previousState)
         }
+    }
+
+    func beginPixelateIntensityEditing() {
+        pixelateIntensityEditingInitialState = currentHistoryState()
+    }
+
+    func setPixelateIntensity(_ intensity: CGFloat) {
+        let previousState = currentHistoryState()
+        let normalizedIntensity = min(max((intensity * 2).rounded() / 2, 1), 12)
+
+        guard normalizedIntensity != selectedPixelateIntensity else {
+            return
+        }
+
+        selectedPixelateIntensity = normalizedIntensity
+
+        if applyActiveStyleToSelectedAnnotation(only: .blurPixelate),
+           pixelateIntensityEditingInitialState == nil {
+            recordUndoState(previousState)
+        }
+    }
+
+    func endPixelateIntensityEditing() {
+        guard let initialState = pixelateIntensityEditingInitialState else {
+            return
+        }
+
+        pixelateIntensityEditingInitialState = nil
+        commitHistoryTransition(from: initialState)
     }
 
     func beginHighlightIntensityEditing() {
@@ -729,6 +764,7 @@ final class EditorViewModel: ObservableObject {
 
             selectedAnnotationID = annotationID
             syncArrowStyleFromSelectedAnnotation(annotation)
+            syncPixelateIntensityFromSelectedAnnotation(annotation)
             syncHighlightIntensityFromSelectedAnnotation(annotation)
             activeDragSession = .resizing(
                 annotationID: annotationID,
@@ -743,6 +779,7 @@ final class EditorViewModel: ObservableObject {
 
             selectedAnnotationID = annotationID
             syncArrowStyleFromSelectedAnnotation(annotation)
+            syncPixelateIntensityFromSelectedAnnotation(annotation)
             syncHighlightIntensityFromSelectedAnnotation(annotation)
             activeDragSession = .moving(
                 annotationID: annotationID,
@@ -1590,7 +1627,7 @@ final class EditorViewModel: ObservableObject {
             lineWidth: selectedStrokeWidth,
             opacity: selectedOpacity,
             fontSize: selectedTextSize,
-            effectIntensity: selectedStrokeWidth,
+            effectIntensity: selectedPixelateIntensity,
             spotlightIntensity: selectedHighlightIntensity,
             spotlightShape: selectedSpotlightShape,
             arrowStyle: selectedArrowStyle
@@ -1635,6 +1672,14 @@ final class EditorViewModel: ObservableObject {
         }
 
         selectedArrowStyle = annotation.style.arrowStyle
+    }
+
+    private func syncPixelateIntensityFromSelectedAnnotation(_ annotation: AnnotationObject) {
+        guard annotation.kind == .blurPixelate else {
+            return
+        }
+
+        selectedPixelateIntensity = min(max(annotation.style.effectIntensity, 1), 12)
     }
 
     private func syncHighlightIntensityFromSelectedAnnotation(_ annotation: AnnotationObject) {

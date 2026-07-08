@@ -74,6 +74,8 @@ private struct EditorToolbarView: View {
             if viewModel.shouldShowHighlightIntensitySlider {
                 highlightShapeMenu
                 highlightIntensitySlider
+            } else if viewModel.shouldShowPixelateIntensitySlider {
+                pixelateIntensitySlider
             } else {
                 colorPalette
                 strokeWidthPicker
@@ -458,10 +460,6 @@ private struct EditorToolbarView: View {
     private func strokeSizeLabel(for width: CGFloat, includeValueSeparator: Bool) -> String {
         let separator = includeValueSeparator ? ": " : " "
 
-        if viewModel.activeTool == .blurPixelate {
-            return "Pixelate Strength\(separator)\(Int(width))"
-        }
-
         if viewModel.usesBadgeSizeControl {
             return "Badge Size\(separator)\(Int(width))"
         }
@@ -505,6 +503,56 @@ private struct EditorToolbarView: View {
         .accessibilityValue(viewModel.selectedArrowStyleTitle)
         .toolbarGroupChrome()
         .toolbarCursor(.pointingHand)
+    }
+
+    private var pixelateIntensitySlider: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "square.grid.3x3.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .accessibilityHidden(true)
+
+            Slider(
+                value: Binding(
+                    get: { viewModel.selectedPixelateIntensity },
+                    set: { viewModel.setPixelateIntensity($0) }
+                ),
+                in: 1...12,
+                step: 0.5,
+                onEditingChanged: { isEditing in
+                    if isEditing {
+                        viewModel.beginPixelateIntensityEditing()
+                    } else {
+                        viewModel.endPixelateIntensityEditing()
+                    }
+                }
+            )
+            .frame(width: 126)
+
+            Text(pixelateIntensityTitle)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .monospacedDigit()
+                .frame(width: 42, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .help("Pixelate Intensity")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Pixelate Intensity")
+        .accessibilityValue(pixelateIntensityTitle)
+        .toolbarGroupChrome()
+        .toolbarCursor(.pointingHand)
+    }
+
+    private var pixelateIntensityTitle: String {
+        let intensity = viewModel.selectedPixelateIntensity
+
+        if intensity.rounded() == intensity {
+            return "\(Int(intensity))x"
+        }
+
+        return "\(Int(floor(intensity))).5x"
     }
 
     private var highlightIntensitySlider: some View {
