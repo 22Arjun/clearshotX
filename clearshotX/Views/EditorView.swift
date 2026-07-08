@@ -24,7 +24,8 @@ struct EditorView: View {
                 draftCropRect: viewModel.draftCropRect,
                 isCropGridVisible: viewModel.isCropGridVisible,
                 selectedAnnotationID: viewModel.selectedAnnotationID,
-                activeTool: viewModel.activeTool
+                activeTool: viewModel.activeTool,
+                textFormattingCommand: viewModel.textFormattingCommand
             )
         }
         .frame(minWidth: 680, minHeight: 460)
@@ -79,6 +80,9 @@ private struct EditorToolbarView: View {
                 pixelateIntensitySlider
             } else {
                 colorPalette
+                if viewModel.isTextEditingActive {
+                    textBackgroundColorMenu
+                }
                 strokeWidthPicker
                 if viewModel.shouldShowArrowStyleMenu {
                     arrowStyleMenu
@@ -422,6 +426,48 @@ private struct EditorToolbarView: View {
             }
         }
         .toolbarGroupChrome()
+    }
+
+    private var textBackgroundColorMenu: some View {
+        Menu {
+            ForEach(EditorViewModel.textBackgroundColorOptions) { option in
+                Button {
+                    viewModel.setTextBackgroundColor(option)
+                } label: {
+                    HStack {
+                        if viewModel.isTextBackgroundColorSelected(option) {
+                            Image(systemName: "checkmark")
+                        }
+
+                        Text(option.name)
+                    }
+                }
+            }
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.clear)
+
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color(nsColor: viewModel.selectedTextBackgroundColor ?? .clear))
+                    .frame(width: 22, height: 18)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(Color(nsColor: .separatorColor).opacity(0.78), lineWidth: 1)
+                    }
+
+                Text("A")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color(nsColor: .labelColor).opacity(0.88))
+            }
+            .frame(width: 34, height: 34)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .help("Selected Text Background")
+        .accessibilityLabel("Selected Text Background")
+        .toolbarGroupChrome()
+        .toolbarCursor(.pointingHand)
     }
 
     private var strokeWidthPicker: some View {
@@ -1204,6 +1250,7 @@ private struct EditorCanvasView: NSViewRepresentable {
     let isCropGridVisible: Bool
     let selectedAnnotationID: UUID?
     let activeTool: EditorTool?
+    let textFormattingCommand: EditorTextFormattingCommand?
 
     func makeNSView(context: Context) -> EditorCanvasNSView {
         let view = EditorCanvasNSView()
@@ -1215,7 +1262,8 @@ private struct EditorCanvasView: NSViewRepresentable {
             draftCropRect: draftCropRect,
             isCropGridVisible: isCropGridVisible,
             selectedAnnotationID: selectedAnnotationID,
-            activeTool: activeTool
+            activeTool: activeTool,
+            textFormattingCommand: textFormattingCommand
         )
         return view
     }
@@ -1229,7 +1277,8 @@ private struct EditorCanvasView: NSViewRepresentable {
             draftCropRect: draftCropRect,
             isCropGridVisible: isCropGridVisible,
             selectedAnnotationID: selectedAnnotationID,
-            activeTool: activeTool
+            activeTool: activeTool,
+            textFormattingCommand: textFormattingCommand
         )
     }
 }
@@ -1260,6 +1309,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private var trackingArea: NSTrackingArea?
     private var activeTextView: AnnotationTextView?
     private var activeTextAnnotationID: UUID?
+    private var lastAppliedTextFormattingCommandID: UUID?
     private var isFinishingTextEditing = false
 
     override init(frame frameRect: NSRect) {
@@ -1506,7 +1556,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         draftCropRect: CGRect?,
         isCropGridVisible: Bool,
         selectedAnnotationID: UUID?,
-        activeTool: EditorTool?
+        activeTool: EditorTool?,
+        textFormattingCommand: EditorTextFormattingCommand?
     ) {
         self.viewModel = viewModel
         if currentImage !== image {
@@ -1520,6 +1571,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         self.isCropGridVisible = isCropGridVisible
         self.selectedAnnotationID = selectedAnnotationID
         self.activeTool = activeTool
+        applyTextFormattingCommandIfNeeded(textFormattingCommand)
         removeTextEditorIfAnnotationDisappeared()
         renderAnnotationLayers()
         renderCropOverlay()
@@ -1537,13 +1589,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     }
 
     func textDidEndEditing(_ notification: Notification) {
-        guard notification.object as? NSTextView === activeTextView,
-              !isFinishingTextEditing
-        else {
-            return
-        }
-
-        finishActiveTextEditing()
+        // Toolbar controls temporarily take focus while applying rich text attributes.
+        // Text commits explicitly through Escape, Cmd-Return, or the next canvas click.
     }
 
     private func handleTextInteraction(
@@ -1591,21 +1638,20 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
 
         guard let viewModel,
               let annotation = viewModel.textAnnotation(withID: annotationID),
-              case let .text(rect, text) = annotation.geometry
+              case let .text(rect, text, runs) = annotation.geometry
         else {
             return
         }
 
         let textView = AnnotationTextView(frame: viewRect(forImageRect: rect.standardizedForEditor))
         textView.delegate = self
-        textView.string = text
         textView.font = NSFont.systemFont(
             ofSize: max(8, annotation.style.fontSize * imageDisplayScale),
             weight: .semibold
         )
         textView.textColor = annotation.style.strokeColor.withAlphaComponent(annotation.style.opacity)
         textView.drawsBackground = false
-        textView.isRichText = false
+        textView.isRichText = true
         textView.importsGraphics = false
         textView.isHorizontallyResizable = false
         textView.isVerticallyResizable = true
@@ -1614,6 +1660,19 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         textView.textContainer?.containerSize = NSSize(
             width: textView.bounds.width,
             height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textStorage?.setAttributedString(
+            attributedText(
+                text,
+                runs: runs,
+                annotation: annotation,
+                displayScale: imageDisplayScale,
+                includeBackgroundAttributes: true
+            )
+        )
+        textView.typingAttributes = textTypingAttributes(
+            for: annotation,
+            displayScale: imageDisplayScale
         )
         textView.onCommit = { [weak self] in
             self?.finishActiveTextEditing()
@@ -1671,7 +1730,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private func syncActiveTextEditorToViewModel() {
         guard let textView = activeTextView,
               let annotationID = activeTextAnnotationID,
-              imageDisplayScale > 0
+              imageDisplayScale > 0,
+              let annotation = viewModel?.textAnnotation(withID: annotationID)
         else {
             return
         }
@@ -1679,8 +1739,80 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         viewModel?.updateEditingText(
             annotationID: annotationID,
             text: textView.string,
+            runs: textView.annotationTextRuns(baseStyle: annotation.style),
             rect: imageRect(forViewRect: textView.frame)
         )
+    }
+
+    private func applyTextFormattingCommandIfNeeded(_ command: EditorTextFormattingCommand?) {
+        guard let command,
+              command.id != lastAppliedTextFormattingCommandID
+        else {
+            return
+        }
+
+        lastAppliedTextFormattingCommandID = command.id
+
+        guard let textView = activeTextView else {
+            return
+        }
+
+        switch command.kind {
+        case .foreground:
+            textView.applyInlineTextColor(command.color)
+        case .background:
+            textView.applyInlineBackgroundColor(command.color)
+        }
+
+        resizeActiveTextEditorToFitContent()
+        syncActiveTextEditorToViewModel()
+        renderAnnotationLayers()
+        window?.makeFirstResponder(textView)
+    }
+
+    private func attributedText(
+        _ text: String,
+        runs: [AnnotationTextRun],
+        annotation: AnnotationObject,
+        displayScale: CGFloat,
+        includeBackgroundAttributes: Bool
+    ) -> NSAttributedString {
+        let attributedString = NSMutableAttributedString(
+            string: text,
+            attributes: textTypingAttributes(for: annotation, displayScale: displayScale)
+        )
+        let textLength = (text as NSString).length
+
+        for run in runs {
+            guard let clampedRun = run.clamped(to: textLength) else {
+                continue
+            }
+
+            if let textColor = clampedRun.textColor {
+                attributedString.addAttribute(.foregroundColor, value: textColor, range: clampedRun.range)
+            }
+
+            if includeBackgroundAttributes,
+               let backgroundColor = clampedRun.backgroundColor {
+                attributedString.addAttribute(.backgroundColor, value: backgroundColor, range: clampedRun.range)
+            }
+        }
+
+        return attributedString
+    }
+
+    private func textTypingAttributes(for annotation: AnnotationObject, displayScale: CGFloat) -> [NSAttributedString.Key: Any] {
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineBreakMode = .byWordWrapping
+
+        return [
+            .font: NSFont.systemFont(
+                ofSize: max(8, annotation.style.fontSize * displayScale),
+                weight: .semibold
+            ),
+            .foregroundColor: annotation.style.strokeColor.withAlphaComponent(annotation.style.opacity),
+            .paragraphStyle: paragraphStyle
+        ]
     }
 
     private func resizeActiveTextEditorToFitContent() {
@@ -1710,7 +1842,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private func updateActiveTextEditorFrame() {
         guard let activeTextAnnotationID,
               let annotation = viewModel?.textAnnotation(withID: activeTextAnnotationID),
-              case let .text(rect, _) = annotation.geometry
+              case let .text(rect, _, _) = annotation.geometry
         else {
             return
         }
@@ -2331,6 +2463,115 @@ private final class AnnotationTextView: NSTextView {
 
         super.keyDown(with: event)
     }
+
+    func applyInlineTextColor(_ color: NSColor?) {
+        applyInlineAttribute(.foregroundColor, value: color)
+    }
+
+    func applyInlineBackgroundColor(_ color: NSColor?) {
+        applyInlineAttribute(.backgroundColor, value: color)
+    }
+
+    func annotationTextRuns(baseStyle: AnnotationStyle) -> [AnnotationTextRun] {
+        guard let textStorage else {
+            return []
+        }
+
+        let fullRange = NSRange(location: 0, length: textStorage.length)
+        var runs: [AnnotationTextRun] = []
+
+        textStorage.enumerateAttributes(in: fullRange, options: []) { attributes, range, _ in
+            let textColor = attributes[.foregroundColor] as? NSColor
+            let backgroundColor = attributes[.backgroundColor] as? NSColor
+            let defaultTextColor = baseStyle.strokeColor.withAlphaComponent(baseStyle.opacity)
+            let normalizedTextColor = textColor?.isEditorSameColor(as: defaultTextColor) == true
+                ? nil
+                : textColor
+
+            if normalizedTextColor != nil || backgroundColor != nil {
+                runs.append(
+                    AnnotationTextRun(
+                        range: range,
+                        textColor: normalizedTextColor,
+                        backgroundColor: backgroundColor
+                    )
+                )
+            }
+        }
+
+        return runs
+    }
+
+    private func applyInlineAttribute(_ key: NSAttributedString.Key, value: Any?) {
+        guard let textStorage else {
+            return
+        }
+
+        let targetRange = formattingRange()
+
+        if targetRange.length == 0 {
+            var updatedTypingAttributes = typingAttributes
+            updatedTypingAttributes[key] = value
+            typingAttributes = updatedTypingAttributes
+            return
+        }
+
+        textStorage.beginEditing()
+        if let value {
+            textStorage.addAttribute(key, value: value, range: targetRange)
+        } else {
+            textStorage.removeAttribute(key, range: targetRange)
+        }
+        textStorage.endEditing()
+        setSelectedRange(targetRange)
+        didChangeText()
+    }
+
+    private func formattingRange() -> NSRange {
+        let selectedRange = selectedRange()
+
+        if selectedRange.length > 0 {
+            return selectedRange
+        }
+
+        let nsString = string as NSString
+        guard nsString.length > 0 else {
+            return selectedRange
+        }
+
+        let insertionLocation = min(selectedRange.location, nsString.length)
+        let characterSet = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        var start = insertionLocation
+        var end = insertionLocation
+
+        while start > 0 {
+            let previousScalar = UnicodeScalar(nsString.character(at: start - 1))
+            guard let previousScalar,
+                  !characterSet.contains(previousScalar)
+            else {
+                break
+            }
+
+            start -= 1
+        }
+
+        while end < nsString.length {
+            let scalar = UnicodeScalar(nsString.character(at: end))
+            guard let scalar,
+                  !characterSet.contains(scalar)
+            else {
+                break
+            }
+
+            end += 1
+        }
+
+        guard end > start else {
+            return selectedRange
+        }
+
+        return NSRange(location: start, length: end - start)
+    }
 }
 
 private final class CropActionButton: NSButton {
@@ -2363,6 +2604,21 @@ private final class CropActionButton: NSButton {
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
+private extension NSColor {
+    func isEditorSameColor(as otherColor: NSColor, tolerance: CGFloat = 0.01) -> Bool {
+        guard let firstColor = usingColorSpace(.deviceRGB),
+              let secondColor = otherColor.usingColorSpace(.deviceRGB)
+        else {
+            return false
+        }
+
+        return abs(firstColor.redComponent - secondColor.redComponent) <= tolerance &&
+            abs(firstColor.greenComponent - secondColor.greenComponent) <= tolerance &&
+            abs(firstColor.blueComponent - secondColor.blueComponent) <= tolerance &&
+            abs(firstColor.alphaComponent - secondColor.alphaComponent) <= tolerance
     }
 }
 

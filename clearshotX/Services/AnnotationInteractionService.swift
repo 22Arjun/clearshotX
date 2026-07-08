@@ -127,7 +127,7 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
             return rects.contains { rect in
                 rect.standardizedForEditor.width >= 12 && rect.standardizedForEditor.height >= 4
             }
-        case let .text(_, text):
+        case let .text(_, text, _):
             return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }

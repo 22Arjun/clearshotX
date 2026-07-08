@@ -1435,13 +1435,10 @@ final class TextAnnotationRenderer: AnnotationShapeRendering {
     let kind = AnnotationObjectKind.text
 
     func makeLayer(for annotation: AnnotationObject, context: AnnotationRenderContext) -> CALayer {
-        let layer = CATextLayer()
+        let layer = CALayer()
         layer.frame = textRect(for: annotation)
-        layer.string = attributedText(for: annotation)
-        layer.alignmentMode = .left
-        layer.truncationMode = .none
-        layer.isWrapped = true
-        layer.contentsGravity = .topLeft
+        layer.contents = renderedTextImage(for: annotation)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        layer.contentsGravity = .resize
         layer.opacity = Float(annotation.style.opacity)
         layer.allowsEdgeAntialiasing = true
         return layer
@@ -1469,14 +1466,14 @@ final class TextAnnotationRenderer: AnnotationShapeRendering {
     }
 
     private func attributedText(for annotation: AnnotationObject) -> NSAttributedString {
-        guard case let .text(_, text) = annotation.geometry else {
+        guard case let .text(_, text, runs) = annotation.geometry else {
             return NSAttributedString()
         }
 
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineBreakMode = .byWordWrapping
 
-        return NSAttributedString(
+        let attributedString = NSMutableAttributedString(
             string: text,
             attributes: [
                 .font: NSFont.systemFont(ofSize: annotation.style.fontSize, weight: .semibold),
@@ -1484,14 +1481,114 @@ final class TextAnnotationRenderer: AnnotationShapeRendering {
                 .paragraphStyle: paragraphStyle
             ]
         )
+        let textLength = (text as NSString).length
+
+        for run in runs {
+            guard let clampedRun = run.clamped(to: textLength),
+                  let textColor = clampedRun.textColor
+            else {
+                continue
+            }
+
+            attributedString.addAttribute(.foregroundColor, value: textColor, range: clampedRun.range)
+        }
+
+        return attributedString
     }
 
     private func textRect(for annotation: AnnotationObject) -> CGRect {
-        guard case let .text(rect, _) = annotation.geometry else {
+        guard case let .text(rect, _, _) = annotation.geometry else {
             return .zero
         }
 
         return rect.standardizedForEditor
+    }
+
+    private func renderedTextImage(for annotation: AnnotationObject) -> NSImage? {
+        guard case let .text(rect, text, runs) = annotation.geometry else {
+            return nil
+        }
+
+        let size = rect.standardizedForEditor.size
+        guard size.width > 0,
+              size.height > 0,
+              !text.isEmpty
+        else {
+            return nil
+        }
+
+        let image = NSImage(size: size)
+        image.lockFocusFlipped(true)
+        NSGraphicsContext.current?.imageInterpolation = .high
+        drawRichText(
+            attributedText(for: annotation),
+            runs: runs,
+            in: CGRect(origin: .zero, size: size),
+            fontSize: annotation.style.fontSize
+        )
+        image.unlockFocus()
+        return image
+    }
+
+    private func drawRichText(
+        _ attributedString: NSAttributedString,
+        runs: [AnnotationTextRun],
+        in rect: CGRect,
+        fontSize: CGFloat
+    ) {
+        let textStorage = NSTextStorage(attributedString: attributedString)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: rect.size)
+        textContainer.lineFragmentPadding = 0
+        textContainer.lineBreakMode = .byWordWrapping
+
+        textStorage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(textContainer)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let textLength = attributedString.length
+        let horizontalPadding = max(4, fontSize * 0.26)
+        let verticalPadding = max(2, fontSize * 0.08)
+
+        for run in runs {
+            guard let clampedRun = run.clamped(to: textLength),
+                  let backgroundColor = clampedRun.backgroundColor
+            else {
+                continue
+            }
+
+            let glyphRange = layoutManager.glyphRange(
+                forCharacterRange: clampedRun.range,
+                actualCharacterRange: nil
+            )
+
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: textContainer
+            ) { enclosingRect, _ in
+                let backgroundRect = enclosingRect
+                    .insetBy(dx: -horizontalPadding, dy: -verticalPadding)
+                    .intersection(rect)
+
+                guard !backgroundRect.isNull else {
+                    return
+                }
+
+                backgroundColor.setFill()
+                NSBezierPath(
+                    roundedRect: backgroundRect,
+                    xRadius: min(9, backgroundRect.height * 0.28),
+                    yRadius: min(9, backgroundRect.height * 0.28)
+                )
+                .fill()
+            }
+        }
+
+        layoutManager.drawGlyphs(
+            forGlyphRange: layoutManager.glyphRange(for: textContainer),
+            at: .zero
+        )
     }
 }
 

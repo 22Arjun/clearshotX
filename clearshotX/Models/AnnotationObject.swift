@@ -39,7 +39,7 @@ enum AnnotationGeometry: Equatable {
     case arrow(start: CGPoint, end: CGPoint)
     case rectangle(CGRect)
     case oval(CGRect)
-    case text(rect: CGRect, text: String)
+    case text(rect: CGRect, text: String, runs: [AnnotationTextRun])
     case textHighlight(CGRect)
     case smartTextHighlight([CGRect])
     case highlight(CGRect)
@@ -58,7 +58,7 @@ enum AnnotationGeometry: Equatable {
             return rect.standardizedForEditor
         case let .smartTextHighlight(rects):
             return rects.unionBoundsForEditor
-        case let .text(rect, _):
+        case let .text(rect, _, _):
             return rect.standardizedForEditor
         }
     }
@@ -74,8 +74,8 @@ enum AnnotationGeometry: Equatable {
             return .rectangle(rect.offsetBy(dx: translation.width, dy: translation.height))
         case let .oval(rect):
             return .oval(rect.offsetBy(dx: translation.width, dy: translation.height))
-        case let .text(rect, text):
-            return .text(rect: rect.offsetBy(dx: translation.width, dy: translation.height), text: text)
+        case let .text(rect, text, runs):
+            return .text(rect: rect.offsetBy(dx: translation.width, dy: translation.height), text: text, runs: runs)
         case let .textHighlight(rect):
             return .textHighlight(rect.offsetBy(dx: translation.width, dy: translation.height))
         case let .smartTextHighlight(rects):
@@ -102,8 +102,8 @@ enum AnnotationGeometry: Equatable {
             return .rectangle(rect.transformedByMappingCorners { $0.rotatedClockwise(in: canvasSize) })
         case let .oval(rect):
             return .oval(rect.transformedByMappingCorners { $0.rotatedClockwise(in: canvasSize) })
-        case let .text(rect, text):
-            return .text(rect: rect.transformedByMappingCorners { $0.rotatedClockwise(in: canvasSize) }, text: text)
+        case let .text(rect, text, runs):
+            return .text(rect: rect.transformedByMappingCorners { $0.rotatedClockwise(in: canvasSize) }, text: text, runs: runs)
         case let .textHighlight(rect):
             return .textHighlight(rect.transformedByMappingCorners { $0.rotatedClockwise(in: canvasSize) })
         case let .smartTextHighlight(rects):
@@ -130,8 +130,8 @@ enum AnnotationGeometry: Equatable {
             return .rectangle(rect.transformedByMappingCorners { $0.flippedHorizontally(in: canvasSize) })
         case let .oval(rect):
             return .oval(rect.transformedByMappingCorners { $0.flippedHorizontally(in: canvasSize) })
-        case let .text(rect, text):
-            return .text(rect: rect.transformedByMappingCorners { $0.flippedHorizontally(in: canvasSize) }, text: text)
+        case let .text(rect, text, runs):
+            return .text(rect: rect.transformedByMappingCorners { $0.flippedHorizontally(in: canvasSize) }, text: text, runs: runs)
         case let .textHighlight(rect):
             return .textHighlight(rect.transformedByMappingCorners { $0.flippedHorizontally(in: canvasSize) })
         case let .smartTextHighlight(rects):
@@ -158,8 +158,8 @@ enum AnnotationGeometry: Equatable {
             return .rectangle(rect.transformedByMappingCorners { $0.flippedVertically(in: canvasSize) })
         case let .oval(rect):
             return .oval(rect.transformedByMappingCorners { $0.flippedVertically(in: canvasSize) })
-        case let .text(rect, text):
-            return .text(rect: rect.transformedByMappingCorners { $0.flippedVertically(in: canvasSize) }, text: text)
+        case let .text(rect, text, runs):
+            return .text(rect: rect.transformedByMappingCorners { $0.flippedVertically(in: canvasSize) }, text: text, runs: runs)
         case let .textHighlight(rect):
             return .textHighlight(rect.transformedByMappingCorners { $0.flippedVertically(in: canvasSize) })
         case let .smartTextHighlight(rects):
@@ -272,7 +272,7 @@ enum AnnotationGeometry: Equatable {
             case .startPoint, .endPoint:
                 return self
             }
-        case let .text(rect, text):
+        case let .text(rect, text, runs):
             let normalizedRect = rect.standardizedForEditor
 
             switch handle {
@@ -284,7 +284,8 @@ enum AnnotationGeometry: Equatable {
                         width: normalizedRect.maxX - point.x,
                         height: normalizedRect.maxY - point.y
                     ).standardizedForEditor,
-                    text: text
+                    text: text,
+                    runs: runs
                 )
             case .topRight:
                 return .text(
@@ -294,7 +295,8 @@ enum AnnotationGeometry: Equatable {
                         width: point.x - normalizedRect.minX,
                         height: normalizedRect.maxY - point.y
                     ).standardizedForEditor,
-                    text: text
+                    text: text,
+                    runs: runs
                 )
             case .bottomLeft:
                 return .text(
@@ -304,7 +306,8 @@ enum AnnotationGeometry: Equatable {
                         width: normalizedRect.maxX - point.x,
                         height: point.y - normalizedRect.minY
                     ).standardizedForEditor,
-                    text: text
+                    text: text,
+                    runs: runs
                 )
             case .bottomRight:
                 return .text(
@@ -314,7 +317,8 @@ enum AnnotationGeometry: Equatable {
                         width: point.x - normalizedRect.minX,
                         height: point.y - normalizedRect.minY
                     ).standardizedForEditor,
-                    text: text
+                    text: text,
+                    runs: runs
                 )
             case .startPoint, .endPoint:
                 return self
@@ -569,6 +573,50 @@ struct AnnotationStyle: Equatable {
     var arrowStyle: AnnotationArrowStyle = .fancy
 }
 
+struct AnnotationTextRun: Equatable {
+    var location: Int
+    var length: Int
+    var textColor: NSColor?
+    var backgroundColor: NSColor?
+
+    var range: NSRange {
+        NSRange(location: location, length: length)
+    }
+
+    init(range: NSRange, textColor: NSColor? = nil, backgroundColor: NSColor? = nil) {
+        self.location = range.location
+        self.length = range.length
+        self.textColor = textColor
+        self.backgroundColor = backgroundColor
+    }
+
+    init(location: Int, length: Int, textColor: NSColor? = nil, backgroundColor: NSColor? = nil) {
+        self.location = location
+        self.length = length
+        self.textColor = textColor
+        self.backgroundColor = backgroundColor
+    }
+
+    func clamped(to textLength: Int) -> AnnotationTextRun? {
+        let clampedLocation = min(max(location, 0), textLength)
+        let clampedEnd = min(max(location + length, clampedLocation), textLength)
+        let clampedLength = clampedEnd - clampedLocation
+
+        guard clampedLength > 0,
+              textColor != nil || backgroundColor != nil
+        else {
+            return nil
+        }
+
+        return AnnotationTextRun(
+            location: clampedLocation,
+            length: clampedLength,
+            textColor: textColor,
+            backgroundColor: backgroundColor
+        )
+    }
+}
+
 struct AnnotationObject: Identifiable, Equatable {
     let id: UUID
     var kind: AnnotationObjectKind
@@ -692,12 +740,17 @@ struct AnnotationObject: Identifiable, Equatable {
         id: UUID = UUID(),
         rect: CGRect,
         text: String,
+        runs: [AnnotationTextRun] = [],
         style: AnnotationStyle
     ) -> AnnotationObject {
         AnnotationObject(
             id: id,
             kind: .text,
-            geometry: .text(rect: rect.standardizedForEditor, text: text),
+            geometry: .text(
+                rect: rect.standardizedForEditor,
+                text: text,
+                runs: Self.sanitizedTextRuns(runs, for: text)
+            ),
             style: style
         )
     }
@@ -810,14 +863,26 @@ struct AnnotationObject: Identifiable, Equatable {
         return object
     }
 
-    func updatingText(_ text: String, rect: CGRect? = nil) -> AnnotationObject {
-        guard case let .text(currentRect, _) = geometry else {
+    func updatingText(_ text: String, runs: [AnnotationTextRun]? = nil, rect: CGRect? = nil) -> AnnotationObject {
+        guard case let .text(currentRect, _, currentRuns) = geometry else {
             return self
         }
 
         var object = self
-        object.geometry = .text(rect: (rect ?? currentRect).standardizedForEditor, text: text)
+        object.geometry = .text(
+            rect: (rect ?? currentRect).standardizedForEditor,
+            text: text,
+            runs: Self.sanitizedTextRuns(runs ?? currentRuns, for: text)
+        )
         return object
+    }
+
+    private static func sanitizedTextRuns(_ runs: [AnnotationTextRun], for text: String) -> [AnnotationTextRun] {
+        let textLength = (text as NSString).length
+
+        return runs.compactMap { run in
+            run.clamped(to: textLength)
+        }
     }
 }
 

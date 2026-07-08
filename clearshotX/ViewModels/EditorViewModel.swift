@@ -35,6 +35,23 @@ struct EditorStrokeColorOption: Identifiable {
     let color: NSColor
 }
 
+struct EditorTextBackgroundColorOption: Identifiable {
+    let id: String
+    let name: String
+    let color: NSColor?
+}
+
+struct EditorTextFormattingCommand: Equatable {
+    enum Kind: Equatable {
+        case foreground
+        case background
+    }
+
+    let id = UUID()
+    let kind: Kind
+    let color: NSColor?
+}
+
 struct EditorCropRatioOption: Identifiable, Equatable {
     let id: String
     let title: String
@@ -274,11 +291,23 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
 final class EditorViewModel: ObservableObject {
     static let strokeColorOptions: [EditorStrokeColorOption] = [
         EditorStrokeColorOption(id: "red", name: "Red", color: .systemRed),
+        EditorStrokeColorOption(id: "pink", name: "Pink", color: .systemPink),
         EditorStrokeColorOption(id: "yellow", name: "Yellow", color: .systemYellow),
         EditorStrokeColorOption(id: "green", name: "Green", color: .systemGreen),
         EditorStrokeColorOption(id: "blue", name: "Blue", color: .systemBlue),
+        EditorStrokeColorOption(id: "navy", name: "Navy", color: NSColor(calibratedRed: 0.13, green: 0.28, blue: 0.45, alpha: 1)),
         EditorStrokeColorOption(id: "white", name: "White", color: .white),
         EditorStrokeColorOption(id: "black", name: "Black", color: .black)
+    ]
+    static let textBackgroundColorOptions: [EditorTextBackgroundColorOption] = [
+        EditorTextBackgroundColorOption(id: "clear", name: "None", color: nil),
+        EditorTextBackgroundColorOption(id: "pink", name: "Light Pink", color: NSColor.systemPink.withAlphaComponent(0.16)),
+        EditorTextBackgroundColorOption(id: "yellow", name: "Soft Yellow", color: NSColor.systemYellow.withAlphaComponent(0.28)),
+        EditorTextBackgroundColorOption(id: "green", name: "Soft Green", color: NSColor.systemGreen.withAlphaComponent(0.22)),
+        EditorTextBackgroundColorOption(id: "blue", name: "Soft Blue", color: NSColor.systemBlue.withAlphaComponent(0.2)),
+        EditorTextBackgroundColorOption(id: "navy", name: "Deep Blue", color: NSColor(calibratedRed: 0.13, green: 0.28, blue: 0.45, alpha: 1)),
+        EditorTextBackgroundColorOption(id: "black", name: "Black", color: .black),
+        EditorTextBackgroundColorOption(id: "white", name: "White", color: .white)
     ]
 
     static let strokeWidthOptions: [CGFloat] = [2, 4, 6, 8]
@@ -318,6 +347,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var draftAnnotationObject: AnnotationObject?
     @Published private(set) var draftCropRect: CGRect?
     @Published private(set) var selectedStrokeColorID = "red"
+    @Published private(set) var selectedTextBackgroundColorID = "pink"
     @Published private(set) var selectedStrokeWidth: CGFloat = 4
     @Published private(set) var selectedArrowStyle: AnnotationArrowStyle = .fancy
     @Published private(set) var selectedTextSize: CGFloat = 24
@@ -332,6 +362,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var isCropGridVisible = false
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
+    @Published private(set) var textFormattingCommand: EditorTextFormattingCommand?
 
     private let annotationInteractionService: AnnotationInteractionServicing
     private let outputService: EditorOutputServicing
@@ -339,6 +370,7 @@ final class EditorViewModel: ObservableObject {
     private let smartTextRecognitionService = SmartTextRecognitionService()
     private var activeDragSession: EditorDragSession?
     private var textEditingInitialState: EditorHistoryState?
+    private var activeTextEditingAnnotationID: UUID?
     private var pixelateIntensityEditingInitialState: EditorHistoryState?
     private var highlightIntensityEditingInitialState: EditorHistoryState?
     private var smartTextWordCache: SmartTextWordCache?
@@ -353,6 +385,16 @@ final class EditorViewModel: ObservableObject {
         Self.strokeColorOptions.first { option in
             option.id == selectedStrokeColorID
         }?.color ?? .systemRed
+    }
+
+    var selectedTextBackgroundColor: NSColor? {
+        Self.textBackgroundColorOptions.first { option in
+            option.id == selectedTextBackgroundColorID
+        }?.color ?? NSColor.systemPink.withAlphaComponent(0.16)
+    }
+
+    var isTextEditingActive: Bool {
+        activeTextEditingAnnotationID != nil
     }
 
     var isCropModeActive: Bool {
@@ -515,9 +557,30 @@ final class EditorViewModel: ObservableObject {
         let previousState = currentHistoryState()
         selectedStrokeColorID = option.id
 
+        if isTextEditingActive {
+            textFormattingCommand = EditorTextFormattingCommand(
+                kind: .foreground,
+                color: option.color
+            )
+            return
+        }
+
         if applyActiveStyleToSelectedAnnotation() {
             recordUndoState(previousState)
         }
+    }
+
+    func setTextBackgroundColor(_ option: EditorTextBackgroundColorOption) {
+        selectedTextBackgroundColorID = option.id
+
+        guard isTextEditingActive else {
+            return
+        }
+
+        textFormattingCommand = EditorTextFormattingCommand(
+            kind: .background,
+            color: option.color
+        )
     }
 
     func setStrokeWidth(_ width: CGFloat) {
@@ -653,6 +716,10 @@ final class EditorViewModel: ObservableObject {
         selectedStrokeColorID == option.id
     }
 
+    func isTextBackgroundColorSelected(_ option: EditorTextBackgroundColorOption) -> Bool {
+        selectedTextBackgroundColorID == option.id
+    }
+
     func isStrokeWidthSelected(_ width: CGFloat) -> Bool {
         selectedStrokeWidth == width
     }
@@ -724,6 +791,7 @@ final class EditorViewModel: ObservableObject {
         draftAnnotationObject = nil
         activeDragSession = nil
         textEditingInitialState = previousState
+        activeTextEditingAnnotationID = annotation.id
         return annotation.id
     }
 
@@ -737,10 +805,16 @@ final class EditorViewModel: ObservableObject {
         draftAnnotationObject = nil
         activeDragSession = nil
         textEditingInitialState = currentHistoryState()
+        activeTextEditingAnnotationID = annotationID
         return true
     }
 
-    func updateEditingText(annotationID: UUID, text: String, rect: CGRect) {
+    func updateEditingText(
+        annotationID: UUID,
+        text: String,
+        runs: [AnnotationTextRun],
+        rect: CGRect
+    ) {
         guard let annotation = annotation(withID: annotationID),
               annotation.kind == .text
         else {
@@ -749,7 +823,7 @@ final class EditorViewModel: ObservableObject {
 
         updateAnnotation(
             withID: annotationID,
-            to: annotation.updatingText(text, rect: rect)
+            to: annotation.updatingText(text, runs: runs, rect: rect)
         )
     }
 
@@ -759,7 +833,7 @@ final class EditorViewModel: ObservableObject {
         }
 
         if let annotation = annotation(withID: annotationID),
-           case let .text(_, text) = annotation.geometry,
+           case let .text(_, text, _) = annotation.geometry,
            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             annotationObjects.removeAll { annotation in
                 annotation.id == annotationID
@@ -771,6 +845,7 @@ final class EditorViewModel: ObservableObject {
         }
 
         textEditingInitialState = nil
+        activeTextEditingAnnotationID = nil
         commitHistoryTransition(from: initialHistoryState)
     }
 
@@ -2092,6 +2167,7 @@ final class EditorViewModel: ObservableObject {
         activeDragSession = nil
         isCropGridVisible = false
         textEditingInitialState = nil
+        activeTextEditingAnnotationID = nil
     }
 
     private func commitHistoryTransition(from previousState: EditorHistoryState) {
