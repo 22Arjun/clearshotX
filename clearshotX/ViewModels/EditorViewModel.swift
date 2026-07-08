@@ -311,6 +311,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var selectedTextSize: CGFloat = 24
     @Published private(set) var selectedOpacity: CGFloat = 1
     @Published private(set) var selectedPixelateIntensity: CGFloat = 4
+    @Published private(set) var selectedImageEffect: AnnotationImageEffect = .pixelate
     @Published private(set) var selectedHighlightIntensity: CGFloat = 0.45
     @Published private(set) var selectedSpotlightShape: AnnotationSpotlightShape = .rectangle
     @Published private(set) var selectedCropRatioID = "freeform"
@@ -366,6 +367,10 @@ final class EditorViewModel: ObservableObject {
 
     var selectedSpotlightShapeTitle: String {
         selectedSpotlightShape.title
+    }
+
+    var selectedImageEffectTitle: String {
+        selectedImageEffect.title
     }
 
     var selectedArrowStyleTitle: String {
@@ -561,6 +566,19 @@ final class EditorViewModel: ObservableObject {
 
         pixelateIntensityEditingInitialState = nil
         commitHistoryTransition(from: initialState)
+    }
+
+    func setImageEffect(_ imageEffect: AnnotationImageEffect) {
+        let previousState = currentHistoryState()
+        selectedImageEffect = imageEffect
+
+        if applyActiveStyleToSelectedAnnotation(only: .blurPixelate) {
+            recordUndoState(previousState)
+        }
+    }
+
+    func isImageEffectSelected(_ imageEffect: AnnotationImageEffect) -> Bool {
+        selectedImageEffect == imageEffect
     }
 
     func beginHighlightIntensityEditing() {
@@ -1628,6 +1646,7 @@ final class EditorViewModel: ObservableObject {
             opacity: selectedOpacity,
             fontSize: selectedTextSize,
             effectIntensity: selectedPixelateIntensity,
+            imageEffect: selectedImageEffect,
             spotlightIntensity: selectedHighlightIntensity,
             spotlightShape: selectedSpotlightShape,
             arrowStyle: selectedArrowStyle
@@ -1680,6 +1699,7 @@ final class EditorViewModel: ObservableObject {
         }
 
         selectedPixelateIntensity = min(max(annotation.style.effectIntensity, 1), 12)
+        selectedImageEffect = annotation.style.imageEffect
     }
 
     private func syncHighlightIntensityFromSelectedAnnotation(_ annotation: AnnotationObject) {

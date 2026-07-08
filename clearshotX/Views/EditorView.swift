@@ -75,6 +75,7 @@ private struct EditorToolbarView: View {
                 highlightShapeMenu
                 highlightIntensitySlider
             } else if viewModel.shouldShowPixelateIntensitySlider {
+                imageEffectMenu
                 pixelateIntensitySlider
             } else {
                 colorPalette
@@ -505,9 +506,52 @@ private struct EditorToolbarView: View {
         .toolbarCursor(.pointingHand)
     }
 
+    private var imageEffectMenu: some View {
+        Menu {
+            ForEach(AnnotationImageEffect.allCases) { imageEffect in
+                Button {
+                    viewModel.setImageEffect(imageEffect)
+                } label: {
+                    HStack {
+                        if viewModel.isImageEffectSelected(imageEffect) {
+                            Image(systemName: "checkmark")
+                        }
+
+                        Label(imageEffect.title, systemImage: imageEffect.systemImageName)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: viewModel.selectedImageEffect.systemImageName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+
+                Text(viewModel.selectedImageEffectTitle)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .frame(minWidth: 72, alignment: .leading)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            }
+            .foregroundStyle(Color(nsColor: .labelColor).opacity(0.9))
+            .padding(.horizontal, 10)
+            .frame(height: 34)
+            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .menuStyle(.borderlessButton)
+        .help("Blur Type: \(viewModel.selectedImageEffectTitle)")
+        .accessibilityLabel("Blur Type")
+        .accessibilityValue(viewModel.selectedImageEffectTitle)
+        .toolbarGroupChrome()
+        .toolbarCursor(.pointingHand)
+    }
+
     private var pixelateIntensitySlider: some View {
         HStack(spacing: 8) {
-            Image(systemName: "square.grid.3x3.fill")
+            Image(systemName: viewModel.selectedImageEffect.systemImageName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 .accessibilityHidden(true)
@@ -537,9 +581,9 @@ private struct EditorToolbarView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 34)
-        .help("Pixelate Intensity")
+        .help("\(viewModel.selectedImageEffectTitle) Intensity")
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Pixelate Intensity")
+        .accessibilityLabel("\(viewModel.selectedImageEffectTitle) Intensity")
         .accessibilityValue(pixelateIntensityTitle)
         .toolbarGroupChrome()
         .toolbarCursor(.pointingHand)

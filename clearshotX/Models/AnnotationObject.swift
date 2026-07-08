@@ -484,6 +484,48 @@ enum AnnotationSpotlightShape: String, CaseIterable, Identifiable {
     }
 }
 
+enum AnnotationImageEffect: String, CaseIterable, Identifiable {
+    case pixelate
+    case gaussianBlur
+    case motionBlur
+    case zoomBlur
+    case discBlur
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .pixelate:
+            "Pixelate"
+        case .gaussianBlur:
+            "Gaussian Blur"
+        case .motionBlur:
+            "Motion Blur"
+        case .zoomBlur:
+            "Zoom Blur"
+        case .discBlur:
+            "Disc Blur"
+        }
+    }
+
+    var systemImageName: String {
+        switch self {
+        case .pixelate:
+            "square.grid.3x3.fill"
+        case .gaussianBlur:
+            "circle.dotted"
+        case .motionBlur:
+            "wind"
+        case .zoomBlur:
+            "scope"
+        case .discBlur:
+            "circle.grid.3x3.fill"
+        }
+    }
+}
+
 struct AnnotationStyle: Equatable {
     var strokeColor: NSColor = .controlAccentColor
     var fillColor: NSColor = .clear
@@ -491,6 +533,7 @@ struct AnnotationStyle: Equatable {
     var opacity: CGFloat = 1
     var fontSize: CGFloat = 24
     var effectIntensity: CGFloat = 4
+    var imageEffect: AnnotationImageEffect = .pixelate
     var spotlightIntensity: CGFloat = 0.45
     var spotlightShape: AnnotationSpotlightShape = .rectangle
     var arrowStyle: AnnotationArrowStyle = .fancy

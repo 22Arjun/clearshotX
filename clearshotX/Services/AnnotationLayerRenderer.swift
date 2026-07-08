@@ -1058,7 +1058,7 @@ final class BlurPixelateAnnotationRenderer: AnnotationShapeRendering {
         guard normalizedRect.width >= 1,
               normalizedRect.height >= 1,
               let sourceImage = context.sourceImage,
-              let pixelatedImage = pixelatedImage(
+              let effectImage = renderedEffectImage(
                 for: normalizedRect,
                 annotation: annotation,
                 sourceImage: sourceImage,
@@ -1070,10 +1070,10 @@ final class BlurPixelateAnnotationRenderer: AnnotationShapeRendering {
 
         let layer = CALayer()
         layer.frame = normalizedRect
-        layer.contents = pixelatedImage
+        layer.contents = effectImage
         layer.contentsGravity = .resize
-        layer.magnificationFilter = .nearest
-        layer.minificationFilter = .nearest
+        layer.magnificationFilter = annotation.style.imageEffect == .pixelate ? .nearest : .linear
+        layer.minificationFilter = annotation.style.imageEffect == .pixelate ? .nearest : .trilinear
         layer.masksToBounds = true
         layer.cornerRadius = cornerRadius(for: normalizedRect)
         return layer
@@ -1118,7 +1118,7 @@ final class BlurPixelateAnnotationRenderer: AnnotationShapeRendering {
         )
     }
 
-    private func pixelatedImage(
+    private func renderedEffectImage(
         for rect: CGRect,
         annotation: AnnotationObject,
         sourceImage: CGImage,
@@ -1132,17 +1132,67 @@ final class BlurPixelateAnnotationRenderer: AnnotationShapeRendering {
             return nil
         }
 
-        let inputImage = CIImage(cgImage: sourceImage)
-        let filter = CIFilter(name: "CIPixellate")
-        filter?.setValue(inputImage.clampedToExtent(), forKey: kCIInputImageKey)
-        filter?.setValue(CIVector(x: pixelRect.midX, y: pixelRect.midY), forKey: kCIInputCenterKey)
-        filter?.setValue(pixelationScale(for: annotation, pixelRect: pixelRect, sourceImage: sourceImage, canvasSize: canvasSize), forKey: kCIInputScaleKey)
+        let inputImage = CIImage(cgImage: sourceImage).clampedToExtent()
+        let outputImage = filteredImage(
+            inputImage,
+            annotation: annotation,
+            pixelRect: pixelRect,
+            sourceImage: sourceImage,
+            canvasSize: canvasSize
+        )
 
-        guard let outputImage = filter?.outputImage?.cropped(to: pixelRect) else {
+        guard let outputImage else {
             return nil
         }
 
-        return ciContext.createCGImage(outputImage, from: pixelRect)
+        return ciContext.createCGImage(outputImage.cropped(to: pixelRect), from: pixelRect)
+    }
+
+    private func filteredImage(
+        _ inputImage: CIImage,
+        annotation: AnnotationObject,
+        pixelRect: CGRect,
+        sourceImage: CGImage,
+        canvasSize: CGSize
+    ) -> CIImage? {
+        switch annotation.style.imageEffect {
+        case .pixelate:
+            let filter = CIFilter(name: "CIPixellate")
+            filter?.setValue(inputImage, forKey: kCIInputImageKey)
+            filter?.setValue(CIVector(x: pixelRect.midX, y: pixelRect.midY), forKey: kCIInputCenterKey)
+            filter?.setValue(
+                pixelationScale(
+                    for: annotation,
+                    pixelRect: pixelRect,
+                    sourceImage: sourceImage,
+                    canvasSize: canvasSize
+                ),
+                forKey: kCIInputScaleKey
+            )
+            return filter?.outputImage
+        case .gaussianBlur:
+            let filter = CIFilter(name: "CIGaussianBlur")
+            filter?.setValue(inputImage, forKey: kCIInputImageKey)
+            filter?.setValue(blurRadius(for: annotation, sourceImage: sourceImage, canvasSize: canvasSize), forKey: kCIInputRadiusKey)
+            return filter?.outputImage
+        case .motionBlur:
+            let filter = CIFilter(name: "CIMotionBlur")
+            filter?.setValue(inputImage, forKey: kCIInputImageKey)
+            filter?.setValue(blurRadius(for: annotation, sourceImage: sourceImage, canvasSize: canvasSize) * 1.8, forKey: kCIInputRadiusKey)
+            filter?.setValue(-CGFloat.pi / 8, forKey: kCIInputAngleKey)
+            return filter?.outputImage
+        case .zoomBlur:
+            let filter = CIFilter(name: "CIZoomBlur")
+            filter?.setValue(inputImage, forKey: kCIInputImageKey)
+            filter?.setValue(CIVector(x: pixelRect.midX, y: pixelRect.midY), forKey: kCIInputCenterKey)
+            filter?.setValue(blurRadius(for: annotation, sourceImage: sourceImage, canvasSize: canvasSize) * 2.8, forKey: kCIInputAmountKey)
+            return filter?.outputImage
+        case .discBlur:
+            let filter = CIFilter(name: "CIDiscBlur")
+            filter?.setValue(inputImage, forKey: kCIInputImageKey)
+            filter?.setValue(blurRadius(for: annotation, sourceImage: sourceImage, canvasSize: canvasSize), forKey: kCIInputRadiusKey)
+            return filter?.outputImage
+        }
     }
 
     private func sourcePixelRect(
@@ -1195,6 +1245,18 @@ final class BlurPixelateAnnotationRenderer: AnnotationShapeRendering {
         )
         let requestedScale = annotation.style.effectIntensity * 5 * pixelRatio
         return min(max(6, requestedScale), max(pixelRect.width, pixelRect.height))
+    }
+
+    private func blurRadius(
+        for annotation: AnnotationObject,
+        sourceImage: CGImage,
+        canvasSize: CGSize
+    ) -> CGFloat {
+        let pixelRatio = max(
+            CGFloat(sourceImage.width) / max(canvasSize.width, 1),
+            CGFloat(sourceImage.height) / max(canvasSize.height, 1)
+        )
+        return min(max(2, annotation.style.effectIntensity * 2.25 * pixelRatio), 80 * pixelRatio)
     }
 
     private func placeholderLayer(for rect: CGRect) -> CALayer {
