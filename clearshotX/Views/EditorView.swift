@@ -2547,6 +2547,8 @@ private extension View {
             keyboardShortcut("t", modifiers: [])
         case .textHighlight:
             keyboardShortcut("m", modifiers: [])
+        case .smartTextHighlight:
+            keyboardShortcut("s", modifiers: [])
         case .highlight:
             keyboardShortcut("h", modifiers: [])
         case .blurPixelate:

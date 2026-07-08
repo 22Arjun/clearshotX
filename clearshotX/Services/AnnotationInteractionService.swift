@@ -101,7 +101,7 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
                 ),
                 style: style
             )
-        case .text, .crop:
+        case .text, .smartTextHighlight, .crop:
             return nil
         case .textHighlight:
             return AnnotationObject.textHighlight(
@@ -123,6 +123,10 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
             return rect.standardizedForEditor.width >= 8 && rect.standardizedForEditor.height >= 8
         case let .textHighlight(rect):
             return rect.standardizedForEditor.width >= 12
+        case let .smartTextHighlight(rects):
+            return rects.contains { rect in
+                rect.standardizedForEditor.width >= 12 && rect.standardizedForEditor.height >= 4
+            }
         case let .text(_, text):
             return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
