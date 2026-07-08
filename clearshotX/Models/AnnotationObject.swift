@@ -10,6 +10,7 @@ import Foundation
 
 enum AnnotationObjectKind: String, CaseIterable, Identifiable {
     case arrow
+    case line
     case rectangle
     case filledRectangle
     case oval
@@ -428,6 +429,20 @@ struct AnnotationObject: Identifiable, Equatable {
         AnnotationObject(
             id: id,
             kind: .arrow,
+            geometry: .arrow(start: start, end: end),
+            style: style
+        )
+    }
+
+    static func line(
+        id: UUID = UUID(),
+        start: CGPoint,
+        end: CGPoint,
+        style: AnnotationStyle
+    ) -> AnnotationObject {
+        AnnotationObject(
+            id: id,
+            kind: .line,
             geometry: .arrow(start: start, end: end),
             style: style
         )

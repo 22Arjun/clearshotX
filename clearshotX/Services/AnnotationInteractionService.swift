@@ -47,6 +47,8 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
         switch tool {
         case .arrow:
             return AnnotationObject.arrow(start: startPoint, end: endPoint, style: style)
+        case .line:
+            return AnnotationObject.line(start: startPoint, end: endPoint, style: style)
         case .rectangle:
             return AnnotationObject.rectangle(
                 rect: CGRect(

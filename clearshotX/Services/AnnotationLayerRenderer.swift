@@ -28,6 +28,7 @@ final class AnnotationRendererRegistry {
 
     init(renderers: [AnnotationShapeRendering] = [
         ArrowAnnotationRenderer(),
+        LineAnnotationRenderer(),
         RectangleAnnotationRenderer(),
         FilledRectangleAnnotationRenderer(),
         OvalAnnotationRenderer(),
@@ -491,6 +492,58 @@ final class ArrowAnnotationRenderer: AnnotationShapeRendering {
             x: point.x + vector.dx * distance,
             y: point.y + vector.dy * distance
         )
+    }
+}
+
+final class LineAnnotationRenderer: AnnotationShapeRendering {
+    let kind = AnnotationObjectKind.line
+
+    func makeLayer(for annotation: AnnotationObject, context: AnnotationRenderContext) -> CALayer {
+        let layer = CAShapeLayer()
+        layer.path = linePath(for: annotation)
+        layer.fillColor = NSColor.clear.cgColor
+        layer.strokeColor = annotation.style.strokeColor.cgColor
+        layer.lineWidth = annotation.style.lineWidth
+        layer.lineCap = .round
+        layer.allowsEdgeAntialiasing = true
+        layer.opacity = Float(annotation.style.opacity)
+        return layer
+    }
+
+    func hitTest(_ point: CGPoint, annotation: AnnotationObject, tolerance: CGFloat) -> Bool {
+        guard case let .arrow(start, end) = annotation.geometry else {
+            return false
+        }
+
+        let expandedTolerance = max(tolerance, annotation.style.lineWidth / 2 + 4)
+        return point.distanceToLineSegment(start: start, end: end) <= expandedTolerance
+    }
+
+    func resizeHandles(for annotation: AnnotationObject, size: CGFloat) -> [AnnotationResizeHandle: CGRect] {
+        guard case let .arrow(start, end) = annotation.geometry else {
+            return [:]
+        }
+
+        return [
+            .startPoint: handleRect(centeredAt: start, size: size),
+            .endPoint: handleRect(centeredAt: end, size: size)
+        ]
+    }
+
+    func selectionPath(for annotation: AnnotationObject) -> CGPath {
+        linePath(for: annotation)
+    }
+
+    private func linePath(for annotation: AnnotationObject) -> CGPath {
+        let path = CGMutablePath()
+
+        guard case let .arrow(start, end) = annotation.geometry else {
+            return path
+        }
+
+        path.move(to: start)
+        path.addLine(to: end)
+        return path
     }
 }
 

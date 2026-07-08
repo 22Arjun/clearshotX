@@ -11,6 +11,7 @@ import Foundation
 
 enum EditorTool: String, CaseIterable, Identifiable {
     case arrow
+    case line
     case rectangle
     case filledRectangle
     case oval
@@ -77,6 +78,7 @@ enum EditorCropFrameHandle: Equatable, CaseIterable {
 
 enum EditorToolbarAction: String, CaseIterable, Identifiable {
     case arrow
+    case line
     case rectangle
     case filledRectangle
     case oval
@@ -97,6 +99,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         switch self {
         case .arrow:
             "Arrow"
+        case .line:
+            "Line"
         case .rectangle:
             "Rectangle"
         case .filledRectangle:
@@ -126,6 +130,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         switch self {
         case .arrow:
             "arrow.up.right"
+        case .line:
+            "line.diagonal"
         case .rectangle:
             "rectangle"
         case .filledRectangle:
@@ -155,6 +161,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         switch self {
         case .arrow:
             "A"
+        case .line:
+            "L"
         case .rectangle:
             "R"
         case .filledRectangle:
@@ -184,6 +192,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         switch self {
         case .arrow:
             .arrow
+        case .line:
+            .line
         case .rectangle:
             .rectangle
         case .filledRectangle:
@@ -205,6 +215,7 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
 
     static let drawingTools: [EditorToolbarAction] = [
         .arrow,
+        .line,
         .rectangle,
         .filledRectangle,
         .oval,
@@ -407,7 +418,7 @@ final class EditorViewModel: ObservableObject {
             copy()
         case .save:
             save()
-        case .arrow, .rectangle, .filledRectangle, .oval, .text, .highlight, .blurPixelate, .crop:
+        case .arrow, .line, .rectangle, .filledRectangle, .oval, .text, .highlight, .blurPixelate, .crop:
             break
         }
     }
@@ -426,7 +437,7 @@ final class EditorViewModel: ObservableObject {
             canUndo
         case .redo:
             canRedo
-        case .arrow, .rectangle, .filledRectangle, .oval, .text, .highlight, .blurPixelate, .crop, .copy, .save:
+        case .arrow, .line, .rectangle, .filledRectangle, .oval, .text, .highlight, .blurPixelate, .crop, .copy, .save:
             true
         }
     }
@@ -874,6 +885,9 @@ final class EditorViewModel: ObservableObject {
         switch shortcut.lowercased() {
         case "a":
             selectTool(.arrow)
+            return true
+        case "l":
+            selectTool(.line)
             return true
         case "r":
             selectTool(.rectangle)
