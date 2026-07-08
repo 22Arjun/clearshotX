@@ -2112,6 +2112,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private var drawingToolIsActive: Bool {
         activeTool == .arrow ||
             activeTool == .rectangle ||
+            activeTool == .filledRectangle ||
             activeTool == .oval ||
             activeTool == .highlight ||
             activeTool == .blurPixelate ||
@@ -2335,6 +2336,8 @@ private extension View {
             keyboardShortcut("a", modifiers: [])
         case .rectangle:
             keyboardShortcut("r", modifiers: [])
+        case .filledRectangle:
+            keyboardShortcut("f", modifiers: [])
         case .oval:
             keyboardShortcut("o", modifiers: [])
         case .text:

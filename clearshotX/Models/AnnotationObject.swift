@@ -11,6 +11,7 @@ import Foundation
 enum AnnotationObjectKind: String, CaseIterable, Identifiable {
     case arrow
     case rectangle
+    case filledRectangle
     case oval
     case text
     case highlight
@@ -440,6 +441,19 @@ struct AnnotationObject: Identifiable, Equatable {
         AnnotationObject(
             id: id,
             kind: .rectangle,
+            geometry: .rectangle(rect.standardizedForEditor),
+            style: style
+        )
+    }
+
+    static func filledRectangle(
+        id: UUID = UUID(),
+        rect: CGRect,
+        style: AnnotationStyle
+    ) -> AnnotationObject {
+        AnnotationObject(
+            id: id,
+            kind: .filledRectangle,
             geometry: .rectangle(rect.standardizedForEditor),
             style: style
         )

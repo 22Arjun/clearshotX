@@ -29,6 +29,7 @@ final class AnnotationRendererRegistry {
     init(renderers: [AnnotationShapeRendering] = [
         ArrowAnnotationRenderer(),
         RectangleAnnotationRenderer(),
+        FilledRectangleAnnotationRenderer(),
         OvalAnnotationRenderer(),
         HighlightAnnotationRenderer(),
         BlurPixelateAnnotationRenderer(),
@@ -503,6 +504,55 @@ final class RectangleAnnotationRenderer: AnnotationShapeRendering {
         layer.strokeColor = annotation.style.strokeColor.cgColor
         layer.lineWidth = annotation.style.lineWidth
         layer.lineJoin = .round
+        layer.opacity = Float(annotation.style.opacity)
+        return layer
+    }
+
+    func hitTest(_ point: CGPoint, annotation: AnnotationObject, tolerance: CGFloat) -> Bool {
+        guard case let .rectangle(rect) = annotation.geometry else {
+            return false
+        }
+
+        return rect.standardizedForEditor.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+    }
+
+    func resizeHandles(for annotation: AnnotationObject, size: CGFloat) -> [AnnotationResizeHandle: CGRect] {
+        guard case let .rectangle(rect) = annotation.geometry else {
+            return [:]
+        }
+
+        let normalizedRect = rect.standardizedForEditor
+
+        return [
+            .topLeft: handleRect(centeredAt: CGPoint(x: normalizedRect.minX, y: normalizedRect.minY), size: size),
+            .topRight: handleRect(centeredAt: CGPoint(x: normalizedRect.maxX, y: normalizedRect.minY), size: size),
+            .bottomLeft: handleRect(centeredAt: CGPoint(x: normalizedRect.minX, y: normalizedRect.maxY), size: size),
+            .bottomRight: handleRect(centeredAt: CGPoint(x: normalizedRect.maxX, y: normalizedRect.maxY), size: size)
+        ]
+    }
+
+    func selectionPath(for annotation: AnnotationObject) -> CGPath {
+        rectanglePath(for: annotation)
+    }
+
+    private func rectanglePath(for annotation: AnnotationObject) -> CGPath {
+        guard case let .rectangle(rect) = annotation.geometry else {
+            return CGMutablePath()
+        }
+
+        return CGPath(rect: rect.standardizedForEditor, transform: nil)
+    }
+}
+
+final class FilledRectangleAnnotationRenderer: AnnotationShapeRendering {
+    let kind = AnnotationObjectKind.filledRectangle
+
+    func makeLayer(for annotation: AnnotationObject, context: AnnotationRenderContext) -> CALayer {
+        let layer = CAShapeLayer()
+        layer.path = rectanglePath(for: annotation)
+        layer.fillColor = annotation.style.strokeColor.cgColor
+        layer.strokeColor = annotation.style.strokeColor.cgColor
+        layer.lineWidth = 0
         layer.opacity = Float(annotation.style.opacity)
         return layer
     }

@@ -57,6 +57,16 @@ final class AnnotationInteractionService: AnnotationInteractionServicing {
                 ),
                 style: style
             )
+        case .filledRectangle:
+            return AnnotationObject.filledRectangle(
+                rect: CGRect(
+                    x: startPoint.x,
+                    y: startPoint.y,
+                    width: endPoint.x - startPoint.x,
+                    height: endPoint.y - startPoint.y
+                ),
+                style: style
+            )
         case .oval:
             return AnnotationObject.oval(
                 rect: CGRect(
