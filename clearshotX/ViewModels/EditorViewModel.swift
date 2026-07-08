@@ -299,6 +299,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var selectedArrowStyle: AnnotationArrowStyle = .fancy
     @Published private(set) var selectedTextSize: CGFloat = 24
     @Published private(set) var selectedOpacity: CGFloat = 1
+    @Published private(set) var selectedHighlightIntensity: CGFloat = 0.45
     @Published private(set) var selectedCropRatioID = "freeform"
     @Published private(set) var customCropRatio: CGFloat?
     @Published private(set) var selectedCropFillColorID = "transparent"
@@ -311,6 +312,7 @@ final class EditorViewModel: ObservableObject {
     private let canvasResizeService: EditorCanvasResizing
     private var activeDragSession: EditorDragSession?
     private var textEditingInitialState: EditorHistoryState?
+    private var highlightIntensityEditingInitialState: EditorHistoryState?
     private var undoStack: [EditorHistoryState] = []
     private var redoStack: [EditorHistoryState] = []
     private var imageRevision = UUID()
@@ -334,6 +336,10 @@ final class EditorViewModel: ObservableObject {
 
     var usesBadgeSizeControl: Bool {
         activeTool == .numbering || selectedAnnotation?.kind == .numbering
+    }
+
+    var shouldShowHighlightIntensitySlider: Bool {
+        activeTool == .highlight || selectedAnnotation?.kind == .highlight
     }
 
     var selectedArrowStyleTitle: String {
@@ -502,6 +508,29 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    func beginHighlightIntensityEditing() {
+        highlightIntensityEditingInitialState = currentHistoryState()
+    }
+
+    func setHighlightIntensity(_ intensity: CGFloat) {
+        let previousState = currentHistoryState()
+        selectedHighlightIntensity = min(max(intensity, 0.1), 0.85)
+
+        if applyActiveStyleToSelectedAnnotation(only: .highlight),
+           highlightIntensityEditingInitialState == nil {
+            recordUndoState(previousState)
+        }
+    }
+
+    func endHighlightIntensityEditing() {
+        guard let initialState = highlightIntensityEditingInitialState else {
+            return
+        }
+
+        highlightIntensityEditingInitialState = nil
+        commitHistoryTransition(from: initialState)
+    }
+
     func isStrokeColorSelected(_ option: EditorStrokeColorOption) -> Bool {
         selectedStrokeColorID == option.id
     }
@@ -656,6 +685,7 @@ final class EditorViewModel: ObservableObject {
 
             selectedAnnotationID = annotationID
             syncArrowStyleFromSelectedAnnotation(annotation)
+            syncHighlightIntensityFromSelectedAnnotation(annotation)
             activeDragSession = .resizing(
                 annotationID: annotationID,
                 handle: handle,
@@ -669,6 +699,7 @@ final class EditorViewModel: ObservableObject {
 
             selectedAnnotationID = annotationID
             syncArrowStyleFromSelectedAnnotation(annotation)
+            syncHighlightIntensityFromSelectedAnnotation(annotation)
             activeDragSession = .moving(
                 annotationID: annotationID,
                 startPoint: point,
@@ -815,6 +846,13 @@ final class EditorViewModel: ObservableObject {
             if let draftAnnotationObject,
                annotationInteractionService.shouldCommit(draftAnnotationObject) {
                 let previousState = currentHistoryState()
+
+                if draftAnnotationObject.kind == .highlight {
+                    annotationObjects.removeAll { annotation in
+                        annotation.kind == .highlight
+                    }
+                }
+
                 annotationObjects.append(draftAnnotationObject)
                 selectedAnnotationID = draftAnnotationObject.id
                 recordUndoState(previousState)
@@ -1506,6 +1544,7 @@ final class EditorViewModel: ObservableObject {
             opacity: selectedOpacity,
             fontSize: selectedTextSize,
             effectIntensity: selectedStrokeWidth,
+            spotlightIntensity: selectedHighlightIntensity,
             arrowStyle: selectedArrowStyle
         )
     }
@@ -1548,6 +1587,14 @@ final class EditorViewModel: ObservableObject {
         }
 
         selectedArrowStyle = annotation.style.arrowStyle
+    }
+
+    private func syncHighlightIntensityFromSelectedAnnotation(_ annotation: AnnotationObject) {
+        guard annotation.kind == .highlight else {
+            return
+        }
+
+        selectedHighlightIntensity = annotation.style.spotlightIntensity
     }
 
     private func annotation(withID id: UUID) -> AnnotationObject? {

@@ -71,13 +71,17 @@ private struct EditorToolbarView: View {
     private var annotationToolbarContent: some View {
         Group {
             toolButtonGroup(EditorToolbarAction.drawingTools)
-            colorPalette
-            strokeWidthPicker
-            if viewModel.shouldShowArrowStyleMenu {
-                arrowStyleMenu
+            if viewModel.shouldShowHighlightIntensitySlider {
+                highlightIntensitySlider
+            } else {
+                colorPalette
+                strokeWidthPicker
+                if viewModel.shouldShowArrowStyleMenu {
+                    arrowStyleMenu
+                }
+                textSizeMenu
+                opacityMenu
             }
-            textSizeMenu
-            opacityMenu
             Spacer(minLength: 12)
             toolButtonGroup(EditorToolbarAction.historyCommands)
             toolButtonGroup(EditorToolbarAction.outputCommands)
@@ -494,6 +498,46 @@ private struct EditorToolbarView: View {
         .help("Arrow Style: \(viewModel.selectedArrowStyleTitle)")
         .accessibilityLabel("Arrow Style")
         .accessibilityValue(viewModel.selectedArrowStyleTitle)
+        .toolbarGroupChrome()
+        .toolbarCursor(.pointingHand)
+    }
+
+    private var highlightIntensitySlider: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sun.min.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .accessibilityHidden(true)
+
+            Slider(
+                value: Binding(
+                    get: { viewModel.selectedHighlightIntensity },
+                    set: { viewModel.setHighlightIntensity($0) }
+                ),
+                in: 0.1...0.85,
+                step: 0.05,
+                onEditingChanged: { isEditing in
+                    if isEditing {
+                        viewModel.beginHighlightIntensityEditing()
+                    } else {
+                        viewModel.endHighlightIntensityEditing()
+                    }
+                }
+            )
+            .frame(width: 96)
+
+            Text("\(Int(round(viewModel.selectedHighlightIntensity * 100)))%")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .monospacedDigit()
+                .frame(width: 34, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .help("Outside Fade Intensity")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Outside Fade Intensity")
+        .accessibilityValue("\(Int(round(viewModel.selectedHighlightIntensity * 100))) percent")
         .toolbarGroupChrome()
         .toolbarCursor(.pointingHand)
     }

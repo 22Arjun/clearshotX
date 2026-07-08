@@ -71,7 +71,10 @@ final class AnnotationLayerRenderer {
             sourceImage: sourceImage,
             canvasSize: containerLayer.bounds.size
         )
-        let visualAnnotations = (annotations + (draftAnnotation.map { [$0] } ?? []))
+        let committedAnnotations = draftAnnotation?.kind == .highlight
+            ? annotations.filter { annotation in annotation.kind != .highlight }
+            : annotations
+        let visualAnnotations = (committedAnnotations + (draftAnnotation.map { [$0] } ?? []))
             .sortedForEditorRendering()
 
         for annotation in visualAnnotations {
@@ -802,12 +805,12 @@ final class HighlightAnnotationRenderer: AnnotationShapeRendering {
 
     func makeLayer(for annotation: AnnotationObject, context: AnnotationRenderContext) -> CALayer {
         let layer = CAShapeLayer()
-        layer.path = highlightPath(for: annotation)
-        layer.fillColor = annotation.style.strokeColor.cgColor
+        layer.path = spotlightMaskPath(for: annotation, canvasSize: context.canvasSize)
+        layer.fillRule = .evenOdd
+        layer.fillColor = NSColor.black.cgColor
         layer.strokeColor = NSColor.clear.cgColor
         layer.lineWidth = 0
-        layer.lineJoin = .round
-        layer.opacity = Float(effectiveOpacity(for: annotation))
+        layer.opacity = Float(min(max(annotation.style.spotlightIntensity, 0.1), 0.85))
         layer.allowsEdgeAntialiasing = true
         return layer
     }
@@ -838,26 +841,29 @@ final class HighlightAnnotationRenderer: AnnotationShapeRendering {
     }
 
     func selectionPath(for annotation: AnnotationObject) -> CGPath {
-        highlightPath(for: annotation)
+        highlightedRegionPath(for: annotation)
     }
 
-    private func highlightPath(for annotation: AnnotationObject) -> CGPath {
+    private func spotlightMaskPath(for annotation: AnnotationObject, canvasSize: CGSize) -> CGPath {
+        let path = CGMutablePath()
+        path.addRect(CGRect(origin: .zero, size: canvasSize))
+        path.addPath(highlightedRegionPath(for: annotation))
+        return path
+    }
+
+    private func highlightedRegionPath(for annotation: AnnotationObject) -> CGPath {
         guard case let .highlight(rect) = annotation.geometry else {
             return CGMutablePath()
         }
 
         let normalizedRect = rect.standardizedForEditor
-        let cornerRadius = min(4, max(1.5, min(normalizedRect.width, normalizedRect.height) * 0.08))
+        let cornerRadius = min(6, max(2, min(normalizedRect.width, normalizedRect.height) * 0.06))
         return CGPath(
             roundedRect: normalizedRect,
             cornerWidth: cornerRadius,
             cornerHeight: cornerRadius,
             transform: nil
         )
-    }
-
-    private func effectiveOpacity(for annotation: AnnotationObject) -> CGFloat {
-        max(0.14, min(0.42, annotation.style.opacity * 0.42))
     }
 }
 

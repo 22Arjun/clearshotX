@@ -396,6 +396,7 @@ struct AnnotationStyle: Equatable {
     var opacity: CGFloat = 1
     var fontSize: CGFloat = 24
     var effectIntensity: CGFloat = 4
+    var spotlightIntensity: CGFloat = 0.45
     var arrowStyle: AnnotationArrowStyle = .fancy
 }
 
