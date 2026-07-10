@@ -313,7 +313,6 @@ final class EditorViewModel: ObservableObject {
 
     static let strokeWidthOptions: [CGFloat] = [2, 4, 6, 8, 10, 12]
     static let textSizeOptions: [CGFloat] = [16, 24, 32, 44]
-    static let opacityOptions: [CGFloat] = [1, 0.75, 0.5]
     static let cropRatioOptions: [EditorCropRatioOption] = [
         EditorCropRatioOption(id: "custom", title: "Custom Ratio", ratio: nil, usesCustomRatio: true),
         EditorCropRatioOption(id: "freeform", title: "Freeform", ratio: nil),
@@ -373,6 +372,7 @@ final class EditorViewModel: ObservableObject {
     private var activeDragSession: EditorDragSession?
     private var textEditingInitialState: EditorHistoryState?
     private var activeTextEditingAnnotationID: UUID?
+    private var opacityEditingInitialState: EditorHistoryState?
     private var pixelateIntensityEditingInitialState: EditorHistoryState?
     private var highlightIntensityEditingInitialState: EditorHistoryState?
     private var smartTextWordCache: SmartTextWordCache?
@@ -645,13 +645,38 @@ final class EditorViewModel: ObservableObject {
         }
     }
 
+    func beginOpacityEditing() {
+        opacityEditingInitialState = currentHistoryState()
+    }
+
     func setOpacity(_ opacity: CGFloat) {
         let previousState = currentHistoryState()
-        selectedOpacity = opacity
+        let steppedOpacity = (opacity * 20).rounded() / 20
+        let normalizedOpacity = min(max(steppedOpacity, 0.1), 1)
 
-        if applyActiveStyleToSelectedAnnotation() {
+        guard normalizedOpacity != selectedOpacity else {
+            return
+        }
+
+        selectedOpacity = normalizedOpacity
+        NSHapticFeedbackManager.defaultPerformer.perform(
+            .levelChange,
+            performanceTime: .now
+        )
+
+        if applyActiveStyleToSelectedAnnotation(),
+           opacityEditingInitialState == nil {
             recordUndoState(previousState)
         }
+    }
+
+    func endOpacityEditing() {
+        guard let initialState = opacityEditingInitialState else {
+            return
+        }
+
+        opacityEditingInitialState = nil
+        commitHistoryTransition(from: initialState)
     }
 
     func beginPixelateIntensityEditing() {
@@ -769,10 +794,6 @@ final class EditorViewModel: ObservableObject {
 
     func isTextFontFamilySelected(_ fontFamily: AnnotationTextFontFamily) -> Bool {
         selectedTextFontFamily == fontFamily
-    }
-
-    func isOpacitySelected(_ opacity: CGFloat) -> Bool {
-        selectedOpacity == opacity
     }
 
     func isCropRatioSelected(_ option: EditorCropRatioOption) -> Bool {

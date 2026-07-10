@@ -92,7 +92,7 @@ private struct EditorToolbarView: View {
                     textFontFamilyMenu
                     textSizeMenu
                 }
-                opacityMenu
+                opacitySlider
             }
             Spacer(minLength: 12)
             toolButtonGroup(EditorToolbarAction.historyCommands)
@@ -844,36 +844,42 @@ private struct EditorToolbarView: View {
         .toolbarCursor(.pointingHand)
     }
 
-    private var opacityMenu: some View {
-        Menu {
-            ForEach(EditorViewModel.opacityOptions, id: \.self) { opacity in
-                Button {
-                    viewModel.setOpacity(opacity)
-                } label: {
-                    HStack {
-                        if viewModel.isOpacitySelected(opacity) {
-                            Image(systemName: "checkmark")
-                        }
-                        Text("\(Int(opacity * 100))%")
+    private var opacitySlider: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "circle.lefthalf.filled")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(Color(nsColor: viewModel.selectedStrokeColor).opacity(viewModel.selectedOpacity))
+                .accessibilityHidden(true)
+
+            Slider(
+                value: Binding(
+                    get: { viewModel.selectedOpacity },
+                    set: { viewModel.setOpacity($0) }
+                ),
+                in: 0.1...1,
+                step: 0.05,
+                onEditingChanged: { isEditing in
+                    if isEditing {
+                        viewModel.beginOpacityEditing()
+                    } else {
+                        viewModel.endOpacityEditing()
                     }
                 }
-            }
-        } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.clear)
+            )
+            .frame(width: 96)
 
-                Image(systemName: "circle.lefthalf.filled")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color(nsColor: viewModel.selectedStrokeColor).opacity(viewModel.selectedOpacity))
-            }
-            .frame(width: 34, height: 34)
-            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            Text("\(Int(round(viewModel.selectedOpacity * 100)))%")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .monospacedDigit()
+                .frame(width: 34, alignment: .trailing)
         }
-        .menuStyle(.borderlessButton)
-        .help("Opacity: \(Int(viewModel.selectedOpacity * 100))%")
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .help("Opacity")
+        .accessibilityElement(children: .combine)
         .accessibilityLabel("Opacity")
-        .accessibilityValue("\(Int(viewModel.selectedOpacity * 100)) percent")
+        .accessibilityValue("\(Int(round(viewModel.selectedOpacity * 100))) percent")
         .toolbarGroupChrome()
         .toolbarCursor(.pointingHand)
     }
