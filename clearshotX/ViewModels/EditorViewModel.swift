@@ -349,7 +349,7 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var selectedStrokeColorID = "red"
     @Published private(set) var selectedTextBackgroundColorID = "pink"
     @Published private(set) var selectedStrokeWidth: CGFloat = 4
-    @Published private(set) var selectedArrowStyle: AnnotationArrowStyle = .fancy
+    @Published private(set) var selectedArrowStyle: AnnotationArrowStyle = .standard
     @Published private(set) var selectedTextSize: CGFloat = 24
     @Published private(set) var selectedTextFontFamily: AnnotationTextFontFamily = .standard
     @Published private(set) var selectedOpacity: CGFloat = 1

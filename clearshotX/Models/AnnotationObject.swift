@@ -625,7 +625,7 @@ struct AnnotationStyle: Equatable {
     var imageEffect: AnnotationImageEffect = .pixelate
     var spotlightIntensity: CGFloat = 0.45
     var spotlightShape: AnnotationSpotlightShape = .rectangle
-    var arrowStyle: AnnotationArrowStyle = .fancy
+    var arrowStyle: AnnotationArrowStyle = .standard
 }
 
 struct AnnotationTextRun: Equatable {

@@ -256,9 +256,9 @@ final class ArrowAnnotationRenderer: AnnotationShapeRendering {
         let tailHalfWidth = tailWidth / 2
         let neckWidth = max(18, selectedWidth * 4.1)
         let neckHalfWidth = neckWidth / 2
-        let headWidth = max(68, neckWidth * 3.35)
+        let headWidth = max(82, neckWidth * 3.85)
         let headHalfWidth = headWidth / 2
-        let headLength = max(58, headWidth * 0.82)
+        let headLength = max(72, headWidth * 0.9)
         let minimumShaftLength = max(36, neckWidth * 3.2)
         let renderLength = max(length, headLength + minimumShaftLength)
         let renderStart = length >= renderLength
