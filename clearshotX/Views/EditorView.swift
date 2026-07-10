@@ -482,26 +482,30 @@ private struct EditorToolbarView: View {
                             Image(systemName: "checkmark")
                         }
 
+                        strokeWidthPreview(
+                            width: width,
+                            previewWidth: 42,
+                            color: Color(nsColor: viewModel.selectedStrokeColor).opacity(viewModel.selectedOpacity)
+                        )
+
                         Text(strokeSizeLabel(for: width, includeValueSeparator: true))
                     }
                 }
             }
         } label: {
-            HStack(spacing: 7) {
-                Capsule()
-                    .fill(Color(nsColor: .labelColor).opacity(0.82))
-                    .frame(width: 22, height: max(2, min(viewModel.selectedStrokeWidth, 8)))
-
-                Text("\(Int(viewModel.selectedStrokeWidth))")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
+            HStack(spacing: 8) {
+                strokeWidthPreview(
+                    width: viewModel.selectedStrokeWidth,
+                    previewWidth: 34,
+                    color: Color(nsColor: viewModel.selectedStrokeColor).opacity(viewModel.selectedOpacity)
+                )
 
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
             .foregroundStyle(Color(nsColor: .labelColor).opacity(0.9))
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 9)
             .frame(height: 34)
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
@@ -510,6 +514,14 @@ private struct EditorToolbarView: View {
         .accessibilityLabel(strokeSizeLabel(for: viewModel.selectedStrokeWidth, includeValueSeparator: false))
         .toolbarGroupChrome()
         .toolbarCursor(.pointingHand)
+    }
+
+    private func strokeWidthPreview(width: CGFloat, previewWidth: CGFloat, color: Color) -> some View {
+        Capsule()
+            .fill(color)
+            .frame(width: previewWidth, height: max(1, min(width, 12)))
+            .frame(width: previewWidth, height: 16, alignment: .center)
+            .accessibilityHidden(true)
     }
 
     private func strokeSizeLabel(for width: CGFloat, includeValueSeparator: Bool) -> String {
