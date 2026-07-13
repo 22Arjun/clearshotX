@@ -163,6 +163,8 @@ private struct EditorToolbarView: View {
     private func toolButtonGroup(_ actions: [EditorToolbarAction]) -> some View {
         HStack(spacing: 3) {
             ForEach(actions) { action in
+                let isEnabled = viewModel.isEnabled(action)
+
                 Button {
                     viewModel.perform(action)
                 } label: {
@@ -170,13 +172,18 @@ private struct EditorToolbarView: View {
                         .frame(width: 34, height: 34)
                         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
-                .buttonStyle(EditorToolbarButtonStyle(isSelected: viewModel.isSelected(action)))
-                .disabled(!viewModel.isEnabled(action))
+                .buttonStyle(
+                    EditorToolbarButtonStyle(
+                        isSelected: viewModel.isSelected(action),
+                        isEnabled: isEnabled
+                    )
+                )
+                .disabled(!isEnabled)
                 .help("\(action.title) (\(action.shortcutHint))")
                 .editorKeyboardShortcut(for: action)
                 .accessibilityLabel(action.title)
                 .accessibilityHint("Shortcut \(action.shortcutHint)")
-                .toolbarCursor(viewModel.isEnabled(action) ? .pointingHand : .arrow)
+                .toolbarCursor(isEnabled ? .pointingHand : .arrow)
             }
         }
         .toolbarGroupChrome()
@@ -964,6 +971,12 @@ private enum EditorToolbarCursorKind: Equatable {
 
 private struct EditorToolbarButtonStyle: ButtonStyle {
     let isSelected: Bool
+    let isEnabled: Bool
+
+    init(isSelected: Bool, isEnabled: Bool = true) {
+        self.isSelected = isSelected
+        self.isEnabled = isEnabled
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -976,14 +989,22 @@ private struct EditorToolbarButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .stroke(borderColor(isPressed: configuration.isPressed), lineWidth: 1)
             }
-            .opacity(configuration.isPressed ? 0.92 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.92 : 1) : 0.34)
     }
 
     private var foregroundColor: Color {
-        isSelected ? Color.white : Color(nsColor: .labelColor).opacity(0.88)
+        guard isEnabled else {
+            return Color(nsColor: .tertiaryLabelColor)
+        }
+
+        return isSelected ? Color.white : Color(nsColor: .labelColor).opacity(0.88)
     }
 
     private func backgroundColor(isPressed: Bool) -> Color {
+        guard isEnabled else {
+            return Color.clear
+        }
+
         if isSelected {
             return Color.accentColor
         }
@@ -996,6 +1017,10 @@ private struct EditorToolbarButtonStyle: ButtonStyle {
     }
 
     private func borderColor(isPressed: Bool) -> Color {
+        guard isEnabled else {
+            return Color.clear
+        }
+
         if isSelected {
             return Color.white.opacity(0.22)
         }
