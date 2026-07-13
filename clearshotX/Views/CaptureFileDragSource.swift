@@ -51,6 +51,16 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         true
     }
 
+    // The quick-access panel is transparent. Explicitly keep thumbnail drags
+    // from being interpreted as background window drags by AppKit.
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
     override func mouseDown(with event: NSEvent) {
         mouseDownLocation = convert(event.locationInWindow, from: nil)
         hasStartedDrag = false
@@ -192,21 +202,26 @@ private final class CaptureDragPasteboardWriter: NSObject, NSPasteboardWriting {
     }
 
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        [.fileURL, .png, .tiff]
+        [.fileURL, .URL, .png, .tiff, .fileContents]
     }
 
     func writingOptions(
         forType type: NSPasteboard.PasteboardType,
         pasteboard: NSPasteboard
     ) -> NSPasteboard.WritingOptions {
-        type == .fileURL ? [] : .promised
+        switch type {
+        case .fileURL, .URL:
+            []
+        default:
+            .promised
+        }
     }
 
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         switch type {
-        case .fileURL:
+        case .fileURL, .URL:
             fileURL.absoluteString
-        case .png:
+        case .png, .fileContents:
             pngData()
         case .tiff:
             image.tiffRepresentation

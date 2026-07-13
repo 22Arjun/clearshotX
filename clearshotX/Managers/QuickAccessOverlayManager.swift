@@ -120,7 +120,8 @@ final class QuickAccessOverlayManager {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
-        panel.isMovableByWindowBackground = true
+        panel.isMovable = false
+        panel.isMovableByWindowBackground = false
         panel.isOpaque = false
         panel.isReleasedWhenClosed = false
         panel.level = .floating
