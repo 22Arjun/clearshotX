@@ -213,6 +213,7 @@ final class QuickAccessOverlayManager {
 
         captureExportService.saveCapture(
             at: capture.fileURL,
+            fallbackSourceURL: capture.dragFileURL,
             suggestedFileName: capture.fileURL.lastPathComponent
         ) { [weak self] result in
             guard let self else {
@@ -304,12 +305,16 @@ final class QuickAccessOverlayManager {
 
     private func delete(_ capture: CaptureResult) {
         do {
-            try captureStore.removeCapture(at: capture.fileURL)
+            try captureStore.removeCapture(
+                at: capture.fileURL,
+                dragFileURL: capture.dragFileURL
+            )
         } catch {
             NSSound.beep()
+            return
         }
 
-        dismiss(animated: true)
+        dismiss(animated: false)
     }
 
     private func presentSaveError(_ error: CaptureExportError) {

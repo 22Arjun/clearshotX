@@ -305,6 +305,7 @@ final class CaptureSavePreferences {
 protocol CaptureExportServicing: AnyObject {
     func saveCapture(
         at sourceURL: URL,
+        fallbackSourceURL: URL?,
         suggestedFileName: String,
         completion: @escaping (Result<CaptureSaveOutcome, CaptureExportError>) -> Void
     )
@@ -330,6 +331,7 @@ final class CaptureExportService: CaptureExportServicing {
 
     func saveCapture(
         at sourceURL: URL,
+        fallbackSourceURL: URL? = nil,
         suggestedFileName: String,
         completion: @escaping (Result<CaptureSaveOutcome, CaptureExportError>) -> Void
     ) {
@@ -338,7 +340,10 @@ final class CaptureExportService: CaptureExportServicing {
             return
         }
 
-        guard let pngData = try? Data(contentsOf: sourceURL) else {
+        guard let pngData = readablePNGData(
+            primaryURL: sourceURL,
+            fallbackURL: fallbackSourceURL
+        ) else {
             completion(.failure(.sourceUnavailable))
             return
         }
@@ -348,6 +353,25 @@ final class CaptureExportService: CaptureExportServicing {
             suggestedFileName: suggestedFileName,
             completion: completion
         )
+    }
+
+    private func readablePNGData(primaryURL: URL, fallbackURL: URL?) -> Data? {
+        let hasScopedAccess = primaryURL.startAccessingSecurityScopedResource()
+        defer {
+            if hasScopedAccess {
+                primaryURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        if let data = try? Data(contentsOf: primaryURL, options: .mappedIfSafe) {
+            return data
+        }
+
+        guard let fallbackURL else {
+            return nil
+        }
+
+        return try? Data(contentsOf: fallbackURL, options: .mappedIfSafe)
     }
 
     func savePNGData(

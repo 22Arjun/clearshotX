@@ -13,7 +13,7 @@ import UniformTypeIdentifiers
 
 protocol CaptureStoring: AnyObject {
     func store(_ image: CGImage) throws -> StoredCapture
-    func removeCapture(at url: URL) throws
+    func removeCapture(at url: URL, dragFileURL: URL?) throws
     func removeExpiredCaptures() throws
 }
 
@@ -130,7 +130,20 @@ final class CaptureStore: CaptureStoring {
         }
     }
 
-    func removeCapture(at url: URL) throws {
+    func removeCapture(at url: URL, dragFileURL: URL? = nil) throws {
+        try removeFile(at: url)
+
+        guard let dragFileURL,
+              dragFileURL.standardizedFileURL != url.standardizedFileURL
+        else {
+            return
+        }
+
+        try removeFile(at: dragFileURL)
+        try? fileManager.removeItem(at: dragFileURL.deletingLastPathComponent())
+    }
+
+    private func removeFile(at url: URL) throws {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {

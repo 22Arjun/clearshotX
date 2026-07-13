@@ -49,7 +49,6 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
     private var localMouseMonitor: Any?
     private var preparedPayload: CaptureDragPayload?
     private var preparedPreview: NSImage?
-    private var hasExposedPreparedPayload = false
 
     deinit {
         removeLocalMouseMonitor()
@@ -144,7 +143,6 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         )
 
         hasStartedDrag = true
-        hasExposedPreparedPayload = true
 
         let session = beginDraggingSession(
             with: [draggingItem],
@@ -290,11 +288,10 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
 
         CaptureDragPayloadFactory.remove(
             preparedPayload,
-            after: hasExposedPreparedPayload ? 60 * 60 : 0
+            after: 60 * 60
         )
         self.preparedPayload = nil
         preparedPreview = nil
-        hasExposedPreparedPayload = false
     }
 
     private func resetDragState() {
