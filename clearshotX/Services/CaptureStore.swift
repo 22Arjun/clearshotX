@@ -27,6 +27,7 @@ enum CaptureStoreError: LocalizedError {
     case destinationCreationFailed
     case imageEncodingFailed
     case destinationAccessDenied
+    case captureFileNotFound
 
     var errorDescription: String? {
         switch self {
@@ -38,6 +39,8 @@ enum CaptureStoreError: LocalizedError {
             "ClearshotX could not encode the screenshot as a PNG."
         case .destinationAccessDenied:
             "ClearShotX does not have permission to save screenshots in this folder."
+        case .captureFileNotFound:
+            "ClearShotX could not find the saved screenshot to delete it."
         }
     }
 
@@ -45,6 +48,8 @@ enum CaptureStoreError: LocalizedError {
         switch self {
         case .destinationAccessDenied:
             "Open ClearShotX Settings, choose Grant Screenshot Folder Access, and select Documents."
+        case .captureFileNotFound:
+            "Check the configured screenshot folder, then try again."
         default:
             "Check that there is available disk space, then try capturing again."
         }
@@ -139,28 +144,46 @@ final class CaptureStore: CaptureStoring {
             return
         }
 
-        try removeFile(at: dragFileURL)
+        _ = try? removeFileIfPresent(at: dragFileURL)
         try? fileManager.removeItem(at: dragFileURL.deletingLastPathComponent())
     }
 
     private func removeStoredCapture(at url: URL) throws {
-        let removedFromCurrentCaptureFolder = (try? preferences.withCaptureStorageDestinationAccess { directoryURL in
-            guard url.deletingLastPathComponent().standardizedFileURL == directoryURL.standardizedFileURL else {
-                return false
+        var folderAccessError: Error?
+
+        do {
+            let didRemove = try preferences.withCaptureStorageDestinationAccess { directoryURL in
+                let savedFileURL = directoryURL.appendingPathComponent(url.lastPathComponent)
+                if try removeFileIfPresent(at: savedFileURL) {
+                    return true
+                }
+
+                guard savedFileURL.standardizedFileURL != url.standardizedFileURL else {
+                    return false
+                }
+
+                return try removeFileIfPresent(at: url)
             }
 
-            try removeFile(at: url)
-            return true
-        }) ?? false
+            if didRemove {
+                return
+            }
+        } catch {
+            folderAccessError = error
+        }
 
-        guard !removedFromCurrentCaptureFolder else {
+        if try removeFileIfPresent(at: url) {
             return
         }
 
-        try removeFile(at: url)
+        if let folderAccessError {
+            throw folderAccessError
+        }
+
+        throw CaptureStoreError.captureFileNotFound
     }
 
-    private func removeFile(at url: URL) throws {
+    private func removeFileIfPresent(at url: URL) throws -> Bool {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {
@@ -169,10 +192,11 @@ final class CaptureStore: CaptureStoring {
         }
 
         guard fileManager.fileExists(atPath: url.path) else {
-            return
+            return false
         }
 
         try fileManager.removeItem(at: url)
+        return true
     }
 
     func removeExpiredCaptures() throws {
