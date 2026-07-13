@@ -161,7 +161,7 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
     var systemImageName: String {
         switch self {
         case .drawing:
-            "pencil"
+            "pencil.tip"
         case .arrow:
             "arrow.up.right"
         case .line:
