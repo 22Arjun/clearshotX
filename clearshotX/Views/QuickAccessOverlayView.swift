@@ -12,6 +12,8 @@ struct QuickAccessOverlayView: View {
     let onHoverChanged: (Bool) -> Void
     let onCopy: () -> Void
     let onSave: () -> Void
+    let onDragBegan: () -> Void
+    let onDragEnded: (_ didDrop: Bool, _ shouldKeepOverlayVisible: Bool) -> Void
     let onEdit: () -> Void
     let onPin: () -> Void
     let onDelete: () -> Void
@@ -71,9 +73,10 @@ struct QuickAccessOverlayView: View {
                 .fill(.black.opacity(0.10))
                 .background(.regularMaterial.opacity(0.50))
 
-            VStack(spacing: 6) {
+            VStack(spacing: 5) {
                 pillButton("Copy", action: onCopy)
                 pillButton("Save", action: onSave)
+                dragPill
             }
 
             cornerButton(systemImage: "xmark", title: "Close", action: onClose)
@@ -92,6 +95,37 @@ struct QuickAccessOverlayView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .padding(7)
         }
+    }
+
+    private var dragPill: some View {
+        ZStack {
+            HStack(spacing: 4) {
+                Image(systemName: "hand.draw.fill")
+                    .font(.system(size: 10, weight: .semibold))
+
+                Text("Drag Me")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 9)
+            .frame(minHeight: 23)
+
+            CaptureFileDragSource(
+                fileURL: capture.fileURL,
+                image: capture.image,
+                onDragBegan: onDragBegan,
+                onDragEnded: onDragEnded
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityLabel("Drag screenshot to another app")
+        }
+        .background(Color.accentColor.opacity(0.92), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(.white.opacity(0.22), lineWidth: 1)
+        }
+        .contentShape(Capsule())
+        .help("Drag to another app. Hold Option to keep this overlay open.")
     }
 
     private func pillButton(_ title: String, action: @escaping () -> Void) -> some View {

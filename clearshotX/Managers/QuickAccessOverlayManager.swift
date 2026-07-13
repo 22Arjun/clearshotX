@@ -34,6 +34,7 @@ final class QuickAccessOverlayManager {
     private var dismissWorkItem: DispatchWorkItem?
     private var currentCapture: CaptureResult?
     private var pinnedPanels: [PinnedPanel] = []
+    private var isDraggingCapture = false
 
     init(
         captureExportService: CaptureExportServicing? = nil,
@@ -49,6 +50,7 @@ final class QuickAccessOverlayManager {
         editorWindowManager: EditorWindowManager
     ) {
         currentCapture = capture
+        isDraggingCapture = false
         dismissWorkItem?.cancel()
 
         let overlayView = QuickAccessOverlayView(
@@ -62,6 +64,15 @@ final class QuickAccessOverlayManager {
             },
             onSave: { [weak self] in
                 self?.save(capture)
+            },
+            onDragBegan: { [weak self] in
+                self?.beginDraggingCapture()
+            },
+            onDragEnded: { [weak self] didDrop, shouldKeepOverlayVisible in
+                self?.finishDraggingCapture(
+                    didDrop: didDrop,
+                    shouldKeepOverlayVisible: shouldKeepOverlayVisible
+                )
             },
             onEdit: { [weak self, editorWindowManager] in
                 self?.dismiss(animated: true)
@@ -148,6 +159,10 @@ final class QuickAccessOverlayManager {
     }
 
     private func setHovering(_ isHovering: Bool) {
+        guard !isDraggingCapture else {
+            return
+        }
+
         if isHovering {
             dismissWorkItem?.cancel()
         } else {
@@ -171,6 +186,7 @@ final class QuickAccessOverlayManager {
         dismissWorkItem?.cancel()
         dismissWorkItem = nil
         currentCapture = nil
+        isDraggingCapture = false
 
         guard let panel, panel.isVisible else {
             return
@@ -209,6 +225,28 @@ final class QuickAccessOverlayManager {
                 presentSaveError(error)
             }
 
+            scheduleDismiss()
+        }
+    }
+
+    private func beginDraggingCapture() {
+        isDraggingCapture = true
+        dismissWorkItem?.cancel()
+        dismissWorkItem = nil
+    }
+
+    private func finishDraggingCapture(
+        didDrop: Bool,
+        shouldKeepOverlayVisible: Bool
+    ) {
+        isDraggingCapture = false
+
+        if didDrop, !shouldKeepOverlayVisible {
+            dismiss(animated: true)
+            return
+        }
+
+        if !didDrop {
             scheduleDismiss()
         }
     }
