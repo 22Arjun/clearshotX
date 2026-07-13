@@ -17,7 +17,7 @@ protocol EditorCanvasResizing {
 
 @MainActor
 final class EditorCanvasResizeService: EditorCanvasResizing {
-    func resizedCanvasImage(from image: NSImage, to cropRect: CGRect, fillColor: NSColor) -> NSImage? {
+    func resizedCanvasImage(from image: NSImage, to cropRect: CGRect, fillColor _: NSColor) -> NSImage? {
         guard let sourceImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return nil
         }
@@ -34,56 +34,28 @@ final class EditorCanvasResizeService: EditorCanvasResizing {
 
         let scaleX = CGFloat(sourceImage.width) / canvasSize.width
         let scaleY = CGFloat(sourceImage.height) / canvasSize.height
-        let outputPixelSize = CGSize(
-            width: max(1, round(targetRect.width * scaleX)),
-            height: max(1, round(targetRect.height * scaleY))
+        let pixelRect = CGRect(
+            x: floor(targetRect.minX * scaleX),
+            y: floor(targetRect.minY * scaleY),
+            width: ceil(targetRect.maxX * scaleX) - floor(targetRect.minX * scaleX),
+            height: ceil(targetRect.maxY * scaleY) - floor(targetRect.minY * scaleY)
         )
+        .intersection(CGRect(x: 0, y: 0, width: sourceImage.width, height: sourceImage.height))
 
-        guard let context = CGContext(
-            data: nil,
-            width: Int(outputPixelSize.width),
-            height: Int(outputPixelSize.height),
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: sourceImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
+        guard pixelRect.width >= 1,
+              pixelRect.height >= 1,
+              let croppedImage = sourceImage.cropping(to: pixelRect)
+        else {
             return nil
         }
 
-        let rootLayer = CALayer()
-        rootLayer.frame = CGRect(origin: .zero, size: targetRect.size)
-        rootLayer.bounds = CGRect(origin: .zero, size: targetRect.size)
-        rootLayer.masksToBounds = true
-        rootLayer.contentsScale = 1
-
-        let imageLayer = CALayer()
-        imageLayer.frame = CGRect(
-            x: -targetRect.minX,
-            y: -targetRect.minY,
-            width: canvasSize.width,
-            height: canvasSize.height
+        // Crop the source pixels directly. This preserves the exact selected pixels
+        // and avoids a second render pass that can shift edges through interpolation.
+        let logicalSize = NSSize(
+            width: CGFloat(croppedImage.width) / scaleX,
+            height: CGFloat(croppedImage.height) / scaleY
         )
-        imageLayer.contents = sourceImage
-        imageLayer.contentsGravity = .resize
-        imageLayer.magnificationFilter = .linear
-        imageLayer.minificationFilter = .trilinear
-        rootLayer.addSublayer(imageLayer)
-
-        context.interpolationQuality = .high
-        context.setFillColor(fillColor.cgColor)
-        context.fill(CGRect(origin: .zero, size: outputPixelSize))
-
-        context.saveGState()
-        context.scaleBy(x: scaleX, y: scaleY)
-        rootLayer.render(in: context)
-        context.restoreGState()
-
-        guard let resizedImage = context.makeImage() else {
-            return nil
-        }
-
-        return NSImage(cgImage: resizedImage, size: targetRect.size)
+        return NSImage(cgImage: croppedImage, size: logicalSize)
     }
 
     func rotatedClockwiseImage(from image: NSImage) -> NSImage? {

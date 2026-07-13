@@ -1464,7 +1464,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private let imageLayer = CALayer()
     private let annotationContainerLayer = CALayer()
     private let cropOverlayLayer = CAShapeLayer()
-    private let cropActionBar = NSVisualEffectView()
+    private let cropActionBar = CropActionBar()
     private let cropCancelButton = CropActionButton(title: "Cancel", target: nil, action: nil)
     private let cropApplyButton = CropActionButton(title: "Crop", target: nil, action: nil)
     private let annotationLayerRenderer = AnnotationLayerRenderer()
@@ -1602,10 +1602,11 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
             return
         }
 
-        let hitResult = viewModel.hitTestAnnotation(
-            at: point,
-            tolerance: hitTestTolerance
-        )
+        // Creation tools own the canvas click, even when another annotation is
+        // underneath it. Existing objects are hit-tested only in Selection mode.
+        let hitResult: AnnotationHitResult = activeTool == nil
+            ? viewModel.hitTestAnnotation(at: point, tolerance: hitTestTolerance)
+            : .empty
 
         if handleTextInteraction(at: point, hitResult: hitResult, event: event) {
             return
@@ -1778,7 +1779,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
             return false
         }
 
-        if case let .annotation(annotationID) = hitResult,
+        if activeTool == nil,
+           case let .annotation(annotationID) = hitResult,
            event.clickCount >= 2,
            viewModel.beginTextEditing(annotationID: annotationID) {
             refreshFromViewModel()
@@ -2258,15 +2260,31 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         let barSize = CGSize(width: 130, height: 34)
         let gap: CGFloat = 10
         let inset: CGFloat = 10
-        let preferredY = cropViewRect.maxY + gap
-        let fallbackY = cropViewRect.minY - barSize.height - gap
-        let y = preferredY + barSize.height <= bounds.maxY - inset
-            ? preferredY
-            : max(bounds.minY + inset, fallbackY)
-        let unclampedX = cropViewRect.midX - barSize.width / 2
-        let x = min(max(unclampedX, bounds.minX + inset), bounds.maxX - barSize.width - inset)
+        let safeBounds = bounds.insetBy(dx: inset, dy: inset)
+        let centeredX = min(
+            max(cropViewRect.midX - barSize.width / 2, safeBounds.minX),
+            safeBounds.maxX - barSize.width
+        )
+        let centeredY = min(
+            max(cropViewRect.midY - barSize.height / 2, safeBounds.minY),
+            safeBounds.maxY - barSize.height
+        )
+        let candidates = [
+            CGRect(x: centeredX, y: cropViewRect.maxY + gap, width: barSize.width, height: barSize.height),
+            CGRect(x: centeredX, y: cropViewRect.minY - barSize.height - gap, width: barSize.width, height: barSize.height),
+            CGRect(x: cropViewRect.maxX + gap, y: centeredY, width: barSize.width, height: barSize.height),
+            CGRect(x: cropViewRect.minX - barSize.width - gap, y: centeredY, width: barSize.width, height: barSize.height)
+        ]
+        let fallbackFrame = CGRect(
+            x: centeredX,
+            y: min(max(cropViewRect.maxY + gap, safeBounds.minY), safeBounds.maxY - barSize.height),
+            width: barSize.width,
+            height: barSize.height
+        )
 
-        cropActionBar.frame = CGRect(origin: CGPoint(x: x, y: y), size: barSize)
+        // Prefer a fully visible placement outside the crop frame. When the frame
+        // fills almost all of the canvas, preserve its upper edge as the fallback.
+        cropActionBar.frame = candidates.first { safeBounds.contains($0) } ?? fallbackFrame
         cropCancelButton.frame = CGRect(x: 7, y: 5, width: 60, height: 24)
         cropApplyButton.frame = CGRect(x: 70, y: 5, width: 53, height: 24)
         cropActionBar.isHidden = false
@@ -2608,22 +2626,21 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
             return activeTool == .text ? .iBeam : drawingToolIsActive ? .crosshair : .arrow
         }
 
+        if activeTool == .text {
+            return .iBeam
+        }
+
+        if drawingToolIsActive {
+            return .crosshair
+        }
+
         switch viewModel.hitTestAnnotation(at: imagePoint, tolerance: hitTestTolerance) {
         case .resize:
             return .crosshair
-        case let .annotation(annotationID):
-            if activeTool == .text,
-               viewModel.textAnnotation(withID: annotationID) != nil {
-                return .iBeam
-            }
-
+        case .annotation:
             return .openHand
         case .empty:
-            if activeTool == .text {
-                return .iBeam
-            }
-
-            return drawingToolIsActive ? .crosshair : .arrow
+            return .arrow
         }
     }
 
@@ -2777,6 +2794,18 @@ private final class AnnotationTextView: NSTextView {
         }
 
         return NSRange(location: start, length: end - start)
+    }
+}
+
+private final class CropActionBar: NSVisualEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hitView = super.hitTest(point) else {
+            return nil
+        }
+
+        // The bar should only own its commands. Its material background must not
+        // prevent a crop handle underneath it from receiving the pointer event.
+        return hitView is CropActionButton ? hitView : nil
     }
 }
 
@@ -2993,6 +3022,8 @@ private extension View {
     @ViewBuilder
     func editorKeyboardShortcut(for action: EditorToolbarAction) -> some View {
         switch action {
+        case .selection:
+            keyboardShortcut("v", modifiers: [])
         case .drawing:
             keyboardShortcut("d", modifiers: [])
         case .arrow:

@@ -100,6 +100,7 @@ enum EditorCropFrameHandle: Equatable, CaseIterable {
 }
 
 enum EditorToolbarAction: String, CaseIterable, Identifiable {
+    case selection
     case drawing
     case arrow
     case line
@@ -123,6 +124,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .selection:
+            "Selection"
         case .drawing:
             "Drawing"
         case .arrow:
@@ -160,6 +163,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
 
     var systemImageName: String {
         switch self {
+        case .selection:
+            "cursorarrow"
         case .drawing:
             "pencil.tip"
         case .arrow:
@@ -197,6 +202,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
 
     var shortcutHint: String {
         switch self {
+        case .selection:
+            "V"
         case .drawing:
             "D"
         case .arrow:
@@ -234,6 +241,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
 
     var tool: EditorTool? {
         switch self {
+        case .selection:
+            nil
         case .drawing:
             .drawing
         case .arrow:
@@ -264,6 +273,7 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
     }
 
     static let drawingTools: [EditorToolbarAction] = [
+        .selection,
         .drawing,
         .arrow,
         .line,
@@ -458,11 +468,13 @@ final class EditorViewModel: ObservableObject {
     }
 
     var cropFramePixelWidth: Int {
-        Int(round((draftCropRect ?? currentCanvasBounds).standardizedForEditor.width))
+        let cropRect = (draftCropRect ?? currentCanvasBounds).standardizedForEditor
+        return Int(round(cropRect.width * canvasPixelScale.width))
     }
 
     var cropFramePixelHeight: Int {
-        Int(round((draftCropRect ?? currentCanvasBounds).standardizedForEditor.height))
+        let cropRect = (draftCropRect ?? currentCanvasBounds).standardizedForEditor
+        return Int(round(cropRect.height * canvasPixelScale.height))
     }
 
     var canvasPixelSizeTitle: String {
@@ -522,13 +534,18 @@ final class EditorViewModel: ObservableObject {
     }
 
     func perform(_ action: EditorToolbarAction) {
+        if action == .selection {
+            clearActiveTool()
+            return
+        }
+
         if action == .crop {
             toggleCropTool()
             return
         }
 
         if let tool = action.tool {
-            selectTool(tool)
+            toggleTool(tool)
             return
         }
 
@@ -541,12 +558,16 @@ final class EditorViewModel: ObservableObject {
             copy()
         case .save:
             save()
-        case .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop:
+        case .selection, .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop:
             break
         }
     }
 
     func isSelected(_ action: EditorToolbarAction) -> Bool {
+        if action == .selection {
+            return activeTool == nil
+        }
+
         guard let tool = action.tool else {
             return false
         }
@@ -560,7 +581,7 @@ final class EditorViewModel: ObservableObject {
             canUndo
         case .redo:
             canRedo
-        case .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop, .copy, .save:
+        case .selection, .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop, .copy, .save:
             true
         }
     }
@@ -812,11 +833,17 @@ final class EditorViewModel: ObservableObject {
     }
 
     func setCropFramePixelWidth(_ width: Int) {
-        updateDraftCropFrameSize(changedAxis: .width, value: CGFloat(width))
+        updateDraftCropFrameSize(
+            changedAxis: .width,
+            value: CGFloat(width) / canvasPixelScale.width
+        )
     }
 
     func setCropFramePixelHeight(_ height: Int) {
-        updateDraftCropFrameSize(changedAxis: .height, value: CGFloat(height))
+        updateDraftCropFrameSize(
+            changedAxis: .height,
+            value: CGFloat(height) / canvasPixelScale.height
+        )
     }
 
     func isCropFillColorSelected(_ option: EditorCropFillColorOption) -> Bool {
@@ -936,6 +963,11 @@ final class EditorViewModel: ObservableObject {
             return
         }
 
+        if let activeTool {
+            beginAnnotationCreation(at: point, tool: activeTool)
+            return
+        }
+
         switch hitResult {
         case let .resize(annotationID, handle):
             guard let annotation = annotation(withID: annotationID) else {
@@ -963,40 +995,43 @@ final class EditorViewModel: ObservableObject {
             )
         case .empty:
             deselectAnnotation()
-
-            if activeTool == .numbering {
-                placeNextNumberingBadge(at: point)
-                return
-            }
-
-            if activeTool == .smartTextHighlight {
-                prepareSmartTextWordCache()
-                draftAnnotationObject = nil
-                activeDragSession = .drawing(tool: .smartTextHighlight, startPoint: point, points: [point])
-                return
-            }
-
-            if activeTool == .drawing {
-                draftAnnotationObject = nil
-                activeDragSession = .drawing(tool: .drawing, startPoint: point, points: [point])
-                return
-            }
-
-            guard let activeTool,
-                  let draftAnnotation = annotationInteractionService.makeAnnotation(
-                    tool: activeTool,
-                    startPoint: point,
-                    endPoint: point,
-                    style: activeAnnotationStyle()
-                  )
-            else {
-                activeDragSession = nil
-                return
-            }
-
-            draftAnnotationObject = draftAnnotation
-            activeDragSession = .drawing(tool: activeTool, startPoint: point, points: [point])
+            activeDragSession = nil
         }
+    }
+
+    private func beginAnnotationCreation(at point: CGPoint, tool: EditorTool) {
+        deselectAnnotation()
+
+        if tool == .numbering {
+            placeNextNumberingBadge(at: point)
+            return
+        }
+
+        if tool == .smartTextHighlight {
+            prepareSmartTextWordCache()
+            draftAnnotationObject = nil
+            activeDragSession = .drawing(tool: tool, startPoint: point, points: [point])
+            return
+        }
+
+        if tool == .drawing {
+            draftAnnotationObject = nil
+            activeDragSession = .drawing(tool: tool, startPoint: point, points: [point])
+            return
+        }
+
+        guard let draftAnnotation = annotationInteractionService.makeAnnotation(
+            tool: tool,
+            startPoint: point,
+            endPoint: point,
+            style: activeAnnotationStyle()
+        ) else {
+            activeDragSession = nil
+            return
+        }
+
+        draftAnnotationObject = draftAnnotation
+        activeDragSession = .drawing(tool: tool, startPoint: point, points: [point])
     }
 
     func beginCropFrameInteraction(
@@ -1216,8 +1251,9 @@ final class EditorViewModel: ObservableObject {
         }
 
         let previousState = currentHistoryState()
+        let preciseCropRect = pixelAlignedCropRect(draftCropRect)
 
-        if applyCanvasCrop(to: draftCropRect) {
+        if applyCanvasCrop(to: preciseCropRect) {
             recordUndoState(previousState)
         }
 
@@ -1226,6 +1262,9 @@ final class EditorViewModel: ObservableObject {
 
     func handleShortcut(_ shortcut: String) -> Bool {
         switch shortcut.lowercased() {
+        case "v":
+            clearActiveTool()
+            return true
         case "d":
             selectTool(.drawing)
             return true
@@ -1325,6 +1364,53 @@ final class EditorViewModel: ObservableObject {
         draftAnnotationObject = nil
         draftCropRect = nil
         return true
+    }
+
+    private func pixelAlignedCropRect(_ cropRect: CGRect) -> CGRect {
+        let normalizedCropRect = cropRect.standardizedForEditor
+        let canvasBounds = currentCanvasBounds
+
+        guard let sourceImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              canvasBounds.width > 0,
+              canvasBounds.height > 0
+        else {
+            return normalizedCropRect
+        }
+
+        let scaleX = canvasPixelScale.width
+        let scaleY = canvasPixelScale.height
+        guard scaleX > 0, scaleY > 0 else {
+            return normalizedCropRect
+        }
+
+        let pixelMinX = floor(normalizedCropRect.minX * scaleX)
+        let pixelMinY = floor(normalizedCropRect.minY * scaleY)
+        let pixelMaxX = ceil(normalizedCropRect.maxX * scaleX)
+        let pixelMaxY = ceil(normalizedCropRect.maxY * scaleY)
+
+        return CGRect(
+            x: pixelMinX / scaleX,
+            y: pixelMinY / scaleY,
+            width: (pixelMaxX - pixelMinX) / scaleX,
+            height: (pixelMaxY - pixelMinY) / scaleY
+        )
+        .intersection(canvasBounds)
+        .standardizedForEditor
+    }
+
+    private var canvasPixelScale: CGSize {
+        let canvasBounds = currentCanvasBounds
+        guard let sourceImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              canvasBounds.width > 0,
+              canvasBounds.height > 0
+        else {
+            return CGSize(width: 1, height: 1)
+        }
+
+        return CGSize(
+            width: max(.leastNonzeroMagnitude, CGFloat(sourceImage.width) / canvasBounds.width),
+            height: max(.leastNonzeroMagnitude, CGFloat(sourceImage.height) / canvasBounds.height)
+        )
     }
 
     private func transformCanvasImage(_ transform: EditorCanvasImageTransform) {
@@ -1820,6 +1906,14 @@ final class EditorViewModel: ObservableObject {
 
         if tool == .smartTextHighlight {
             prepareSmartTextWordCache()
+        }
+    }
+
+    private func toggleTool(_ tool: EditorTool) {
+        if activeTool == tool {
+            clearActiveTool()
+        } else {
+            selectTool(tool)
         }
     }
 
