@@ -844,8 +844,40 @@ struct AnnotationObject: Identifiable, Equatable {
         )
     }
 
+    private static let numberingBadgeSizeSteps: [(width: CGFloat, diameter: CGFloat)] = [
+        (2, 36),
+        (4, 44),
+        (6, 54),
+        (8, 66),
+        (10, 80),
+        (12, 96)
+    ]
+
     static func numberingBadgeDiameter(for strokeWidth: CGFloat) -> CGFloat {
-        32 + min(max(strokeWidth, 2), 8) * 4
+        guard let firstStep = numberingBadgeSizeSteps.first,
+              let lastStep = numberingBadgeSizeSteps.last
+        else {
+            return 44
+        }
+
+        if strokeWidth <= firstStep.width {
+            return firstStep.diameter
+        }
+
+        if strokeWidth >= lastStep.width {
+            return lastStep.diameter
+        }
+
+        for (lowerStep, upperStep) in zip(numberingBadgeSizeSteps, numberingBadgeSizeSteps.dropFirst()) {
+            guard strokeWidth <= upperStep.width else {
+                continue
+            }
+
+            let progress = (strokeWidth - lowerStep.width) / (upperStep.width - lowerStep.width)
+            return lowerStep.diameter + (upperStep.diameter - lowerStep.diameter) * progress
+        }
+
+        return lastStep.diameter
     }
 
     static func rectangle(

@@ -475,7 +475,8 @@ private struct EditorToolbarView: View {
                 Image(nsImage: strokeWidthSymbolImage(
                     width: viewModel.selectedStrokeWidth,
                     color: NSColor.labelColor.withAlphaComponent(0.86),
-                    size: NSSize(width: 30, height: 16)
+                    size: NSSize(width: 30, height: 16),
+                    rendersBadgeSize: viewModel.usesBadgeSizeControl
                 ))
                 .accessibilityHidden(true)
             }
@@ -510,7 +511,8 @@ private struct EditorToolbarView: View {
                         Image(nsImage: strokeWidthSymbolImage(
                             width: width,
                             color: NSColor.labelColor.withAlphaComponent(0.86),
-                            size: NSSize(width: 86, height: 18)
+                            size: NSSize(width: 86, height: 18),
+                            rendersBadgeSize: viewModel.usesBadgeSizeControl
                         ))
                         .accessibilityHidden(true)
                     }
@@ -1323,7 +1325,16 @@ private func cropFillSwatchImage(color: NSColor, size: CGFloat) -> NSImage {
     return image
 }
 
-private func strokeWidthSymbolImage(width: CGFloat, color: NSColor, size: NSSize) -> NSImage {
+private func strokeWidthSymbolImage(
+    width: CGFloat,
+    color: NSColor,
+    size: NSSize,
+    rendersBadgeSize: Bool = false
+) -> NSImage {
+    if rendersBadgeSize {
+        return badgeSizeSymbolImage(width: width, color: color, size: size)
+    }
+
     let image = NSImage(size: size)
     let rect = CGRect(origin: .zero, size: size)
     let strokeHeight = max(2, min(width, size.height - 4))
@@ -1346,6 +1357,34 @@ private func strokeWidthSymbolImage(width: CGFloat, color: NSColor, size: NSSize
     rect.fill()
     color.setFill()
     path.fill()
+    image.unlockFocus()
+
+    return image
+}
+
+private func badgeSizeSymbolImage(width: CGFloat, color: NSColor, size: NSSize) -> NSImage {
+    let image = NSImage(size: size)
+    let rect = CGRect(origin: .zero, size: size)
+    let minimumDiameter = AnnotationObject.numberingBadgeDiameter(for: 2)
+    let maximumDiameter = AnnotationObject.numberingBadgeDiameter(for: 12)
+    let badgeDiameter = AnnotationObject.numberingBadgeDiameter(for: width)
+    let progress = (badgeDiameter - minimumDiameter) / (maximumDiameter - minimumDiameter)
+    let circleDiameter = min(size.height - 2, max(5, 6 + progress * (size.height - 8)))
+    let circleRect = CGRect(
+        x: rect.midX - circleDiameter / 2,
+        y: rect.midY - circleDiameter / 2,
+        width: circleDiameter,
+        height: circleDiameter
+    )
+    let circlePath = NSBezierPath(ovalIn: circleRect)
+    image.isTemplate = false
+
+    image.lockFocus()
+    NSGraphicsContext.current?.imageInterpolation = .high
+    NSColor.clear.setFill()
+    rect.fill()
+    color.setFill()
+    circlePath.fill()
     image.unlockFocus()
 
     return image
