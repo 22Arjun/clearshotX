@@ -33,6 +33,35 @@ struct EditorView: View {
     }
 }
 
+private struct EditorToolbarToolSymbol: View {
+    let action: EditorToolbarAction
+
+    var body: some View {
+        Group {
+            switch action {
+            case .text:
+                Text("T")
+                    .font(.system(size: 18, weight: .semibold, design: .serif))
+                    .baselineOffset(1)
+            case .numbering:
+                ZStack {
+                    Circle()
+                        .stroke(lineWidth: 1.8)
+                        .frame(width: 17, height: 17)
+
+                    Text("1")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .baselineOffset(0.5)
+                }
+            default:
+                Image(systemName: action.systemImageName)
+                    .symbolRenderingMode(.hierarchical)
+            }
+        }
+        .font(.system(size: 15, weight: .semibold))
+    }
+}
+
 private struct EditorToolbarView: View {
     @ObservedObject var viewModel: EditorViewModel
     @State private var isStrokeWidthDropdownPresented = false
@@ -120,9 +149,7 @@ private struct EditorToolbarView: View {
                 Button {
                     viewModel.perform(action)
                 } label: {
-                    Image(systemName: action.systemImageName)
-                        .font(.system(size: 15, weight: .semibold))
-                        .symbolRenderingMode(.hierarchical)
+                    EditorToolbarToolSymbol(action: action)
                         .frame(width: 34, height: 34)
                         .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
