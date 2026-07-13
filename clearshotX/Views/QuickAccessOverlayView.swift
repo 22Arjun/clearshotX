@@ -20,6 +20,7 @@ struct QuickAccessOverlayView: View {
     let onClose: () -> Void
 
     @State private var isHovering = false
+    @State private var isDragging = false
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
@@ -40,14 +41,26 @@ struct QuickAccessOverlayView: View {
                 fileURL: capture.fileURL,
                 image: capture.image,
                 onClick: onEdit,
-                onDragBegan: onDragBegan,
-                onDragEnded: onDragEnded
+                onDragBegan: {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isDragging = true
+                    }
+                    onDragBegan()
+                },
+                onDragEnded: { didDrop in
+                    if !didDrop {
+                        withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
+                            isDragging = false
+                        }
+                    }
+                    onDragEnded(didDrop)
+                }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityLabel("Screenshot thumbnail")
             .accessibilityHint("Click to edit, or drag to another app")
 
-            if isHovering {
+            if isHovering && !isDragging {
                 controls
                     .transition(.opacity.combined(with: .scale(scale: 0.97)))
             }
@@ -61,6 +74,8 @@ struct QuickAccessOverlayView: View {
         .shadow(color: .black.opacity(0.10), radius: 48, x: 0, y: 29)
         .shadow(color: .black.opacity(0.17), radius: 25, x: 0, y: 17)
         .shadow(color: .black.opacity(0.14), radius: 4, x: 0, y: 2)
+        .scaleEffect(isDragging ? 0.94 : 1)
+        .opacity(isDragging ? 0 : 1)
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.14)) {
                 isHovering = hovering

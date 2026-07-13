@@ -45,7 +45,7 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
     private var mouseDownLocation: CGPoint?
     private var hasStartedDrag = false
     private var didStartSecurityScopedAccess = false
-    private var activePasteboardWriter: CaptureDragPasteboardWriter?
+    private var activePasteboardWriter: NSURL?
 
     override var isFlipped: Bool {
         true
@@ -91,10 +91,9 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
             return
         }
 
-        let pasteboardWriter = CaptureDragPasteboardWriter(
-            fileURL: fileURL,
-            image: sourceImage
-        )
+        // Use Foundation's concrete file URL writer so AppKit can create a
+        // native file drag, including access for sandboxed destinations.
+        let pasteboardWriter = fileURL as NSURL
         activePasteboardWriter = pasteboardWriter
         let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardWriter)
         let previewSize = dragPreviewSize(for: sourceImage.size)
@@ -110,7 +109,6 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         )
 
         hasStartedDrag = true
-        onDragBegan?()
 
         let session = beginDraggingSession(
             with: [draggingItem],
@@ -119,6 +117,13 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         )
         session.draggingFormation = .none
         session.animatesToStartingPositionsOnCancelOrFail = true
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        willBeginAt screenPoint: NSPoint
+    ) {
+        onDragBegan?()
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -189,58 +194,5 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         mouseDownLocation = nil
         hasStartedDrag = false
         activePasteboardWriter = nil
-    }
-}
-
-private final class CaptureDragPasteboardWriter: NSObject, NSPasteboardWriting {
-    private let fileURL: URL
-    private let image: NSImage
-
-    init(fileURL: URL, image: NSImage) {
-        self.fileURL = fileURL
-        self.image = image
-    }
-
-    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-        [.fileURL, .URL, .png, .tiff, .fileContents]
-    }
-
-    func writingOptions(
-        forType type: NSPasteboard.PasteboardType,
-        pasteboard: NSPasteboard
-    ) -> NSPasteboard.WritingOptions {
-        switch type {
-        case .fileURL, .URL:
-            []
-        default:
-            .promised
-        }
-    }
-
-    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-        switch type {
-        case .fileURL, .URL:
-            fileURL.absoluteString
-        case .png, .fileContents:
-            pngData()
-        case .tiff:
-            image.tiffRepresentation
-        default:
-            nil
-        }
-    }
-
-    private func pngData() -> Data? {
-        if let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) {
-            return data
-        }
-
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData)
-        else {
-            return nil
-        }
-
-        return bitmap.representation(using: .png, properties: [:])
     }
 }
