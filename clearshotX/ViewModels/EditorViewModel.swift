@@ -387,6 +387,7 @@ final class EditorViewModel: ObservableObject {
     private var pixelateIntensityEditingInitialState: EditorHistoryState?
     private var highlightIntensityEditingInitialState: EditorHistoryState?
     private var smartTextWordCache: SmartTextWordCache?
+    private var creationControlState: EditorAnnotationControlState?
     private var undoStack: [EditorHistoryState] = []
     private var redoStack: [EditorHistoryState] = []
     private var imageRevision = UUID()
@@ -850,6 +851,7 @@ final class EditorViewModel: ObservableObject {
 
     @discardableResult
     func beginTextAnnotation(at point: CGPoint) -> UUID {
+        deselectAnnotation()
         let previousState = currentHistoryState()
         let annotation = AnnotationObject.text(
             rect: defaultTextRect(at: point),
@@ -874,8 +876,7 @@ final class EditorViewModel: ObservableObject {
             return false
         }
 
-        selectedAnnotationID = annotationID
-        syncTextStyleFromSelectedAnnotation(annotation)
+        selectAnnotationForEditing(annotation)
         draftAnnotationObject = nil
         activeDragSession = nil
         textEditingInitialState = currentHistoryState()
@@ -921,6 +922,7 @@ final class EditorViewModel: ObservableObject {
         textEditingInitialState = nil
         activeTextEditingAnnotationID = nil
         commitHistoryTransition(from: initialHistoryState)
+        deselectAnnotation()
     }
 
     func textAnnotation(withID id: UUID) -> AnnotationObject? {
@@ -950,11 +952,7 @@ final class EditorViewModel: ObservableObject {
                 return
             }
 
-            selectedAnnotationID = annotationID
-            syncArrowStyleFromSelectedAnnotation(annotation)
-            syncPixelateIntensityFromSelectedAnnotation(annotation)
-            syncHighlightIntensityFromSelectedAnnotation(annotation)
-            syncTextStyleFromSelectedAnnotation(annotation)
+            selectAnnotationForEditing(annotation)
             activeDragSession = .resizing(
                 annotationID: annotationID,
                 handle: handle,
@@ -966,11 +964,7 @@ final class EditorViewModel: ObservableObject {
                 return
             }
 
-            selectedAnnotationID = annotationID
-            syncArrowStyleFromSelectedAnnotation(annotation)
-            syncPixelateIntensityFromSelectedAnnotation(annotation)
-            syncHighlightIntensityFromSelectedAnnotation(annotation)
-            syncTextStyleFromSelectedAnnotation(annotation)
+            selectAnnotationForEditing(annotation)
             activeDragSession = .moving(
                 annotationID: annotationID,
                 startPoint: point,
@@ -978,7 +972,7 @@ final class EditorViewModel: ObservableObject {
                 initialHistoryState: currentHistoryState()
             )
         case .empty:
-            selectedAnnotationID = nil
+            deselectAnnotation()
 
             if activeTool == .numbering {
                 placeNextNumberingBadge(at: point)
@@ -1154,7 +1148,7 @@ final class EditorViewModel: ObservableObject {
                 }
 
                 annotationObjects.append(draftAnnotationObject)
-                selectedAnnotationID = draftAnnotationObject.id
+                deselectAnnotation()
                 recordUndoState(previousState)
             }
         case let .drawingCropFrame(_, originalRect, hasStartedDrawing):
@@ -1196,7 +1190,7 @@ final class EditorViewModel: ObservableObject {
         annotationObjects.removeAll { annotation in
             annotation.id == selectedAnnotationID
         }
-        self.selectedAnnotationID = nil
+        deselectAnnotation()
         draftAnnotationObject = nil
         draftCropRect = nil
         isCropGridVisible = false
@@ -1206,11 +1200,12 @@ final class EditorViewModel: ObservableObject {
 
     func deselectAnnotation() {
         selectedAnnotationID = nil
+        restoreCreationControlsIfNeeded()
     }
 
     func clearActiveTool() {
+        deselectAnnotation()
         activeTool = nil
-        selectedAnnotationID = nil
         draftAnnotationObject = nil
         draftCropRect = nil
         isCropGridVisible = false
@@ -1339,7 +1334,7 @@ final class EditorViewModel: ObservableObject {
         annotationObjects = annotationObjects.map { annotation in
             annotation.translated(by: translation)
         }
-        selectedAnnotationID = nil
+        deselectAnnotation()
         draftAnnotationObject = nil
         draftCropRect = nil
         return true
@@ -1392,7 +1387,7 @@ final class EditorViewModel: ObservableObject {
         image = transformedImage
         imageRevision = UUID()
         annotationObjects = transformedAnnotations
-        selectedAnnotationID = nil
+        deselectAnnotation()
         draftAnnotationObject = nil
         activeDragSession = nil
         isCropGridVisible = false
@@ -1824,8 +1819,8 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func selectTool(_ tool: EditorTool) {
+        deselectAnnotation()
         activeTool = tool
-        selectedAnnotationID = nil
         draftAnnotationObject = nil
         activeDragSession = nil
         isCropGridVisible = false
@@ -2161,7 +2156,7 @@ final class EditorViewModel: ObservableObject {
         )
 
         annotationObjects.append(annotation)
-        selectedAnnotationID = annotation.id
+        deselectAnnotation()
         activeDragSession = nil
         recordUndoState(previousState)
     }
@@ -2175,39 +2170,80 @@ final class EditorViewModel: ObservableObject {
         return highestNumber == Int.max ? Int.max : highestNumber + 1
     }
 
-    private func syncArrowStyleFromSelectedAnnotation(_ annotation: AnnotationObject) {
-        guard annotation.kind == .arrow else {
-            return
+    private func selectAnnotationForEditing(_ annotation: AnnotationObject) {
+        if creationControlState == nil {
+            creationControlState = currentAnnotationControlState()
         }
 
-        selectedArrowStyle = annotation.style.arrowStyle
+        selectedAnnotationID = annotation.id
+        syncStyleControls(from: annotation.style)
     }
 
-    private func syncPixelateIntensityFromSelectedAnnotation(_ annotation: AnnotationObject) {
-        guard annotation.kind == .blurPixelate else {
-            return
+    private func syncStyleControls(from style: AnnotationStyle) {
+        if let colorOption = Self.strokeColorOptions.first(where: { option in
+            colorsMatch(option.color, style.strokeColor)
+        }) {
+            selectedStrokeColorID = colorOption.id
         }
 
-        selectedPixelateIntensity = min(max(annotation.style.effectIntensity, 1), 12)
-        selectedImageEffect = annotation.style.imageEffect
+        selectedStrokeWidth = style.lineWidth
+        selectedArrowStyle = style.arrowStyle
+        selectedTextSize = style.fontSize
+        selectedTextFontFamily = style.textFontFamily
+        selectedOpacity = style.opacity
+        selectedPixelateIntensity = min(max(style.effectIntensity, 1), 12)
+        selectedImageEffect = style.imageEffect
+        selectedHighlightIntensity = style.spotlightIntensity
+        selectedSpotlightShape = style.spotlightShape
     }
 
-    private func syncHighlightIntensityFromSelectedAnnotation(_ annotation: AnnotationObject) {
-        guard annotation.kind == .highlight else {
-            return
-        }
-
-        selectedHighlightIntensity = annotation.style.spotlightIntensity
-        selectedSpotlightShape = annotation.style.spotlightShape
+    private func currentAnnotationControlState() -> EditorAnnotationControlState {
+        EditorAnnotationControlState(
+            strokeColorID: selectedStrokeColorID,
+            textBackgroundColorID: selectedTextBackgroundColorID,
+            strokeWidth: selectedStrokeWidth,
+            arrowStyle: selectedArrowStyle,
+            textSize: selectedTextSize,
+            textFontFamily: selectedTextFontFamily,
+            opacity: selectedOpacity,
+            pixelateIntensity: selectedPixelateIntensity,
+            imageEffect: selectedImageEffect,
+            highlightIntensity: selectedHighlightIntensity,
+            spotlightShape: selectedSpotlightShape
+        )
     }
 
-    private func syncTextStyleFromSelectedAnnotation(_ annotation: AnnotationObject) {
-        guard annotation.kind == .text else {
+    private func restoreCreationControlsIfNeeded() {
+        guard let creationControlState else {
             return
         }
 
-        selectedTextSize = annotation.style.fontSize
-        selectedTextFontFamily = annotation.style.textFontFamily
+        selectedStrokeColorID = creationControlState.strokeColorID
+        selectedTextBackgroundColorID = creationControlState.textBackgroundColorID
+        selectedStrokeWidth = creationControlState.strokeWidth
+        selectedArrowStyle = creationControlState.arrowStyle
+        selectedTextSize = creationControlState.textSize
+        selectedTextFontFamily = creationControlState.textFontFamily
+        selectedOpacity = creationControlState.opacity
+        selectedPixelateIntensity = creationControlState.pixelateIntensity
+        selectedImageEffect = creationControlState.imageEffect
+        selectedHighlightIntensity = creationControlState.highlightIntensity
+        selectedSpotlightShape = creationControlState.spotlightShape
+        self.creationControlState = nil
+    }
+
+    private func colorsMatch(_ firstColor: NSColor, _ secondColor: NSColor) -> Bool {
+        guard let firstRGB = firstColor.usingColorSpace(.deviceRGB),
+              let secondRGB = secondColor.usingColorSpace(.deviceRGB)
+        else {
+            return firstColor.isEqual(secondColor)
+        }
+
+        let tolerance: CGFloat = 0.002
+        return abs(firstRGB.redComponent - secondRGB.redComponent) <= tolerance &&
+            abs(firstRGB.greenComponent - secondRGB.greenComponent) <= tolerance &&
+            abs(firstRGB.blueComponent - secondRGB.blueComponent) <= tolerance &&
+            abs(firstRGB.alphaComponent - secondRGB.alphaComponent) <= tolerance
     }
 
     private func annotation(withID id: UUID) -> AnnotationObject? {
@@ -2268,6 +2304,15 @@ final class EditorViewModel: ObservableObject {
         isCropGridVisible = false
         textEditingInitialState = nil
         activeTextEditingAnnotationID = nil
+
+        if let selectedAnnotation {
+            if creationControlState == nil {
+                creationControlState = currentAnnotationControlState()
+            }
+            syncStyleControls(from: selectedAnnotation.style)
+        } else {
+            restoreCreationControlsIfNeeded()
+        }
     }
 
     private func commitHistoryTransition(from previousState: EditorHistoryState) {
@@ -2381,6 +2426,20 @@ private struct EditorHistoryState: Equatable {
             lhs.annotationObjects == rhs.annotationObjects &&
             lhs.selectedAnnotationID == rhs.selectedAnnotationID
     }
+}
+
+private struct EditorAnnotationControlState {
+    let strokeColorID: String
+    let textBackgroundColorID: String
+    let strokeWidth: CGFloat
+    let arrowStyle: AnnotationArrowStyle
+    let textSize: CGFloat
+    let textFontFamily: AnnotationTextFontFamily
+    let opacity: CGFloat
+    let pixelateIntensity: CGFloat
+    let imageEffect: AnnotationImageEffect
+    let highlightIntensity: CGFloat
+    let spotlightShape: AnnotationSpotlightShape
 }
 
 private struct SmartTextWordCache {
