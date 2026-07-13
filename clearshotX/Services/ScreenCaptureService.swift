@@ -106,7 +106,7 @@ final class ScreenCaptureService {
             configuration: configuration
         )
 
-        let fileURL = try captureStore.store(cgImage)
+        let storedCapture = try captureStore.store(cgImage)
         let image = NSImage(
             cgImage: cgImage,
             size: NSSize(width: cgImage.width, height: cgImage.height)
@@ -114,7 +114,8 @@ final class ScreenCaptureService {
 
         return CaptureResult(
             image: image,
-            fileURL: fileURL,
+            fileURL: storedCapture.fileURL,
+            dragFileURL: storedCapture.dragFileURL,
             pixelWidth: cgImage.width,
             pixelHeight: cgImage.height,
             screenFrame: display.frame
@@ -181,7 +182,7 @@ final class ScreenCaptureService {
             configuration: configuration
         )
 
-        let fileURL = try captureStore.store(cgImage)
+        let storedCapture = try captureStore.store(cgImage)
         let image = NSImage(
             cgImage: cgImage,
             size: NSSize(width: cgImage.width, height: cgImage.height)
@@ -189,7 +190,8 @@ final class ScreenCaptureService {
 
         return CaptureResult(
             image: image,
-            fileURL: fileURL,
+            fileURL: storedCapture.fileURL,
+            dragFileURL: storedCapture.dragFileURL,
             pixelWidth: cgImage.width,
             pixelHeight: cgImage.height,
             screenFrame: display.frame
@@ -238,7 +240,7 @@ final class ScreenCaptureService {
             configuration: configuration
         )
 
-        let fileURL = try captureStore.store(cgImage)
+        let storedCapture = try captureStore.store(cgImage)
         let image = NSImage(
             cgImage: cgImage,
             size: NSSize(width: cgImage.width, height: cgImage.height)
@@ -246,7 +248,8 @@ final class ScreenCaptureService {
 
         return CaptureResult(
             image: image,
-            fileURL: fileURL,
+            fileURL: storedCapture.fileURL,
+            dragFileURL: storedCapture.dragFileURL,
             pixelWidth: cgImage.width,
             pixelHeight: cgImage.height,
             screenFrame: display?.frame ?? NSScreen.main?.frame ?? .zero

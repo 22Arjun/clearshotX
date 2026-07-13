@@ -7,10 +7,10 @@
 
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct CaptureFileDragSource: NSViewRepresentable {
     let fileURL: URL
+    let dragFileURL: URL
     let image: NSImage
     let onDragBegan: () -> Void
     let onDragEnded: (_ didDrop: Bool) -> Void
@@ -26,8 +26,11 @@ struct CaptureFileDragSource: NSViewRepresentable {
     }
 
     private func configure(_ view: CaptureFileDragSourceView) {
-        view.fileURL = fileURL
-        view.sourceImage = image
+        view.configure(
+            fileURL: fileURL,
+            dragFileURL: dragFileURL,
+            sourceImage: image
+        )
         view.onDragBegan = onDragBegan
         view.onDragEnded = onDragEnded
     }
@@ -42,13 +45,15 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
     private let dragThreshold: CGFloat = 4
     private var mouseDownLocation: CGPoint?
     private var hasStartedDrag = false
-    private var didStartSecurityScopedAccess = false
-    private var activePasteboardWriter: NSFilePromiseProvider?
-    private var activeDragDirectoryURL: URL?
+    private var activePasteboardWriter: CaptureDragPasteboardWriter?
     private var localMouseMonitor: Any?
+    private var preparedPayload: CaptureDragPayload?
+    private var preparedPreview: NSImage?
+    private var hasExposedPreparedPayload = false
 
     deinit {
         removeLocalMouseMonitor()
+        releasePreparedPayload()
     }
 
     override var isFlipped: Bool {
@@ -75,6 +80,25 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         true
     }
 
+    func configure(fileURL: URL, dragFileURL: URL, sourceImage: NSImage) {
+        self.sourceImage = sourceImage
+
+        guard self.fileURL != fileURL || preparedPayload?.fileURL != dragFileURL else {
+            return
+        }
+
+        releasePreparedPayload()
+        self.fileURL = fileURL
+        preparedPreview = dragPreview(
+            for: sourceImage,
+            size: dragPreviewSize(for: sourceImage.size)
+        )
+        preparedPayload = CaptureDragPayload(
+            directoryURL: dragFileURL.deletingLastPathComponent(),
+            fileURL: dragFileURL
+        )
+    }
+
     override func mouseDown(with event: NSEvent) {
         mouseDownLocation = convert(event.locationInWindow, from: nil)
         hasStartedDrag = false
@@ -86,9 +110,10 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
 
     private func beginDragIfNeeded(with event: NSEvent) -> Bool {
         guard !hasStartedDrag,
-              let fileURL,
               let sourceImage,
-              let mouseDownLocation
+              let mouseDownLocation,
+              let preparedPayload,
+              let preparedPreview
         else {
             return false
         }
@@ -102,43 +127,12 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
             return false
         }
 
-        didStartSecurityScopedAccess = fileURL.startAccessingSecurityScopedResource()
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            NSSound.beep()
-            resetDragState()
-            return false
-        }
-
-        guard let pngData = pngData(for: fileURL, fallbackImage: sourceImage) else {
-            NSSound.beep()
-            resetDragState()
-            return false
-        }
-
-        guard let dragFileURL = makeDragFile(
-            pngData: pngData,
-            fileName: promisedFileName(for: fileURL)
-        ) else {
-            NSSound.beep()
-            resetDragState()
-            return false
-        }
-
-        let promiseDelegate = CaptureFilePromiseDelegate(
-            fileName: promisedFileName(for: fileURL),
-            pngData: pngData
+        let pasteboardWriter = CaptureDragPasteboardWriter(
+            fileURL: preparedPayload.fileURL
         )
-        let pasteboardWriter = NSFilePromiseProvider(
-            fileType: UTType.data.identifier,
-            delegate: promiseDelegate
-        )
-        // NSFilePromiseProvider keeps its delegate weakly. Retain the delegate
-        // through userInfo until the destination finishes requesting the file.
-        pasteboardWriter.userInfo = promiseDelegate
         activePasteboardWriter = pasteboardWriter
         let draggingItem = NSDraggingItem(pasteboardWriter: pasteboardWriter)
         let previewSize = dragPreviewSize(for: sourceImage.size)
-        let previewImage = dragPreview(for: sourceImage, size: previewSize)
         draggingItem.setDraggingFrame(
             NSRect(
                 x: currentLocation.x - previewSize.width / 2,
@@ -146,10 +140,11 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
                 width: previewSize.width,
                 height: previewSize.height
             ),
-            contents: previewImage
+            contents: preparedPreview
         )
 
         hasStartedDrag = true
+        hasExposedPreparedPayload = true
 
         let session = beginDraggingSession(
             with: [draggingItem],
@@ -158,12 +153,6 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         )
         session.draggingFormation = .none
         session.animatesToStartingPositionsOnCancelOrFail = true
-        addCompatibleRepresentations(
-            to: session.draggingPasteboard,
-            fileURL: dragFileURL,
-            pngData: pngData,
-            tiffData: sourceImage.tiffRepresentation
-        )
         return true
     }
 
@@ -255,13 +244,10 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         operation: NSDragOperation
     ) {
         let didDrop = !operation.isEmpty
-        let dragDirectoryURL = activeDragDirectoryURL
-        activeDragDirectoryURL = nil
         resetDragState()
-        removeDragDirectory(
-            dragDirectoryURL,
-            after: didDrop ? 60 * 60 : 0
-        )
+        if didDrop, let preparedPayload {
+            CaptureDragPayloadFactory.remove(preparedPayload, after: 60 * 60)
+        }
         onDragEnded?(didDrop)
     }
 
@@ -296,102 +282,40 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         return preview
     }
 
-    private func promisedFileName(for fileURL: URL) -> String {
-        let fileName = fileURL.lastPathComponent
-        if fileName.lowercased().hasSuffix(".png") {
-            return fileName
-        }
-
-        return fileName + ".png"
-    }
-
-    private func pngData(for fileURL: URL, fallbackImage: NSImage) -> Data? {
-        if let data = try? Data(contentsOf: fileURL, options: .mappedIfSafe) {
-            return data
-        }
-
-        guard let tiffData = fallbackImage.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData)
-        else {
-            return nil
-        }
-
-        return bitmap.representation(using: .png, properties: [:])
-    }
-
-    private func makeDragFile(pngData: Data, fileName: String) -> URL? {
-        let fileManager = FileManager.default
-        let exportsDirectory = fileManager.temporaryDirectory
-            .appendingPathComponent("ClearShotX-DragExports", isDirectory: true)
-        removeExpiredDragDirectories(in: exportsDirectory)
-
-        let dragDirectory = exportsDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let dragFileURL = dragDirectory.appendingPathComponent(fileName)
-
-        do {
-            try fileManager.createDirectory(
-                at: dragDirectory,
-                withIntermediateDirectories: true
-            )
-            try pngData.write(to: dragFileURL, options: .atomic)
-            activeDragDirectoryURL = dragDirectory
-            return dragFileURL
-        } catch {
-            try? fileManager.removeItem(at: dragDirectory)
-            return nil
-        }
-    }
-
-    private func removeExpiredDragDirectories(in exportsDirectory: URL) {
-        let fileManager = FileManager.default
-        guard let directories = try? fileManager.contentsOfDirectory(
-            at: exportsDirectory,
-            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+    private func releasePreparedPayload() {
+        guard let preparedPayload else {
+            preparedPreview = nil
             return
         }
 
-        let expirationDate = Date().addingTimeInterval(-24 * 60 * 60)
-        for directory in directories {
-            guard let values = try? directory.resourceValues(
-                forKeys: [.contentModificationDateKey, .isDirectoryKey]
-            ),
-            values.isDirectory == true,
-            let modificationDate = values.contentModificationDate,
-            modificationDate < expirationDate
-            else {
-                continue
-            }
-
-            try? fileManager.removeItem(at: directory)
-        }
+        CaptureDragPayloadFactory.remove(
+            preparedPayload,
+            after: hasExposedPreparedPayload ? 60 * 60 : 0
+        )
+        self.preparedPayload = nil
+        preparedPreview = nil
+        hasExposedPreparedPayload = false
     }
 
-    private func addCompatibleRepresentations(
-        to pasteboard: NSPasteboard,
-        fileURL: URL,
-        pngData: Data,
-        tiffData: Data?
-    ) {
-        pasteboard.setString(fileURL.absoluteString, forType: .fileURL)
-        pasteboard.setData(pngData, forType: .png)
-        if let tiffData {
-            pasteboard.setData(tiffData, forType: .tiff)
-        }
+    private func resetDragState() {
+        mouseDownLocation = nil
+        hasStartedDrag = false
+        activePasteboardWriter = nil
     }
+}
 
-    private func removeDragDirectory(_ directoryURL: URL?, after delay: TimeInterval) {
-        guard let directoryURL else {
-            return
-        }
+private struct CaptureDragPayload: Sendable {
+    let directoryURL: URL
+    let fileURL: URL
+}
 
+private enum CaptureDragPayloadFactory {
+    nonisolated static func remove(_ payload: CaptureDragPayload, after delay: TimeInterval) {
         let remove: @Sendable () -> Void = {
-            _ = try? FileManager.default.removeItem(at: directoryURL)
+            _ = try? FileManager.default.removeItem(at: payload.directoryURL)
         }
 
-        if delay <= 0 {
+        guard delay > 0 else {
             remove()
             return
         }
@@ -402,59 +326,36 @@ final class CaptureFileDragSourceView: NSView, NSDraggingSource {
         )
     }
 
-    private func resetDragState() {
-        if didStartSecurityScopedAccess {
-            fileURL?.stopAccessingSecurityScopedResource()
-            didStartSecurityScopedAccess = false
-        }
-
-        mouseDownLocation = nil
-        hasStartedDrag = false
-        activePasteboardWriter = nil
-        if let activeDragDirectoryURL {
-            try? FileManager.default.removeItem(at: activeDragDirectoryURL)
-            self.activeDragDirectoryURL = nil
-        }
-    }
 }
 
-private final class CaptureFilePromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
-    private let fileName: String
-    private let pngData: Data
-    private let promiseQueue: OperationQueue = {
-        let queue = OperationQueue()
-        queue.name = "com.22Arjun.clearshotX.capture-file-promise"
-        queue.qualityOfService = .userInitiated
-        queue.maxConcurrentOperationCount = 1
-        return queue
-    }()
+private final class CaptureDragPasteboardWriter: NSObject, NSPasteboardWriting {
+    private let fileURL: URL
 
-    init(fileName: String, pngData: Data) {
-        self.fileName = fileName
-        self.pngData = pngData
+    init(fileURL: URL) {
+        self.fileURL = fileURL
     }
 
-    func filePromiseProvider(
-        _ filePromiseProvider: NSFilePromiseProvider,
-        fileNameForType fileType: String
-    ) -> String {
-        fileName
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        [.fileURL, .png, .tiff]
     }
 
-    func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
-        promiseQueue
+    func writingOptions(
+        forType type: NSPasteboard.PasteboardType,
+        pasteboard: NSPasteboard
+    ) -> NSPasteboard.WritingOptions {
+        type == .fileURL ? [] : .promised
     }
 
-    nonisolated func filePromiseProvider(
-        _ filePromiseProvider: NSFilePromiseProvider,
-        writePromiseTo url: URL,
-        completionHandler: @escaping @Sendable (Error?) -> Void
-    ) {
-        do {
-            try pngData.write(to: url, options: .atomic)
-            completionHandler(nil)
-        } catch {
-            completionHandler(error)
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        switch type {
+        case .fileURL:
+            fileURL.absoluteString
+        case .png:
+            try? Data(contentsOf: fileURL, options: .mappedIfSafe)
+        case .tiff:
+            NSImage(contentsOf: fileURL)?.tiffRepresentation
+        default:
+            nil
         }
     }
 }

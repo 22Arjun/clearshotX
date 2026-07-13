@@ -12,9 +12,14 @@ import ImageIO
 import UniformTypeIdentifiers
 
 protocol CaptureStoring: AnyObject {
-    func store(_ image: CGImage) throws -> URL
+    func store(_ image: CGImage) throws -> StoredCapture
     func removeCapture(at url: URL) throws
     func removeExpiredCaptures() throws
+}
+
+struct StoredCapture {
+    let fileURL: URL
+    let dragFileURL: URL
 }
 
 enum CaptureStoreError: LocalizedError {
@@ -68,7 +73,7 @@ final class CaptureStore: CaptureStoring {
         try? removeExpiredCaptures()
     }
 
-    func store(_ image: CGImage) throws -> URL {
+    func store(_ image: CGImage) throws -> StoredCapture {
         try? removeExpiredCaptures()
 
         do {
@@ -103,8 +108,9 @@ final class CaptureStore: CaptureStoring {
                 }
 
                 try fileManager.moveItem(at: stagingURL, to: fileURL)
+                let dragFileURL = try makeDragFile(for: fileURL, image: image)
                 NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
-                return fileURL
+                return StoredCapture(fileURL: fileURL, dragFileURL: dragFileURL)
             }
         } catch let error as CaptureStoreError {
             throw error
@@ -182,6 +188,76 @@ final class CaptureStore: CaptureStoring {
         return cachesURL
             .appendingPathComponent("ClearShotX", isDirectory: true)
             .appendingPathComponent("Captures", isDirectory: true)
+    }
+
+    private func makeDragFile(for sourceURL: URL, image: CGImage) throws -> URL {
+        let exportsDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("ClearShotX-DragExports", isDirectory: true)
+        removeExpiredDragDirectories(in: exportsDirectory)
+
+        let directoryURL = exportsDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let dragFileURL = directoryURL
+            .appendingPathComponent(sourceURL.lastPathComponent)
+
+        do {
+            try fileManager.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
+            )
+
+            do {
+                try fileManager.linkItem(at: sourceURL, to: dragFileURL)
+            } catch {
+                do {
+                    try fileManager.copyItem(at: sourceURL, to: dragFileURL)
+                } catch {
+                    guard let destination = CGImageDestinationCreateWithURL(
+                        dragFileURL as CFURL,
+                        UTType.png.identifier as CFString,
+                        1,
+                        nil
+                    ) else {
+                        throw CaptureStoreError.destinationCreationFailed
+                    }
+
+                    CGImageDestinationAddImage(destination, image, nil)
+                    guard CGImageDestinationFinalize(destination) else {
+                        throw CaptureStoreError.imageEncodingFailed
+                    }
+                }
+            }
+
+            return dragFileURL
+        } catch {
+            try? fileManager.removeItem(at: directoryURL)
+            throw error
+        }
+    }
+
+    private func removeExpiredDragDirectories(in exportsDirectory: URL) {
+        guard let directories = try? fileManager.contentsOfDirectory(
+            at: exportsDirectory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        let expirationDate = now().addingTimeInterval(-24 * 60 * 60)
+        for directory in directories {
+            guard let values = try? directory.resourceValues(
+                forKeys: [.contentModificationDateKey, .isDirectoryKey]
+            ),
+            values.isDirectory == true,
+            let modificationDate = values.contentModificationDate,
+            modificationDate < expirationDate
+            else {
+                continue
+            }
+
+            try? fileManager.removeItem(at: directory)
+        }
     }
 
     private func uniqueCaptureURL(in directoryURL: URL) -> URL {

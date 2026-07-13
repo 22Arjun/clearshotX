@@ -11,6 +11,7 @@ import Foundation
 struct CaptureResult {
     let image: NSImage
     let fileURL: URL
+    let dragFileURL: URL
     let pixelWidth: Int
     let pixelHeight: Int
     let screenFrame: CGRect

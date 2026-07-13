@@ -39,6 +39,7 @@ struct QuickAccessOverlayView: View {
 
             CaptureFileDragSource(
                 fileURL: capture.fileURL,
+                dragFileURL: capture.dragFileURL,
                 image: capture.image,
                 onDragBegan: {
                     withAnimation(.easeOut(duration: 0.12)) {
