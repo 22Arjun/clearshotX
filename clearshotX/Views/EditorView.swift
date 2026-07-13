@@ -2943,8 +2943,6 @@ private extension View {
             keyboardShortcut("o", modifiers: [])
         case .text:
             keyboardShortcut("t", modifiers: [])
-        case .textHighlight:
-            keyboardShortcut("m", modifiers: [])
         case .smartTextHighlight:
             keyboardShortcut("s", modifiers: [])
         case .highlight:

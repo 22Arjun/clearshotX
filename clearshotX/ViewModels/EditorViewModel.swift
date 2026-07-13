@@ -108,7 +108,6 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
     case filledRectangle
     case oval
     case text
-    case textHighlight
     case smartTextHighlight
     case highlight
     case blurPixelate
@@ -140,8 +139,6 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             "Oval"
         case .text:
             "Text"
-        case .textHighlight:
-            "Text Highlight"
         case .smartTextHighlight:
             "Smart Highlighter"
         case .highlight:
@@ -179,8 +176,6 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             "oval"
         case .text:
             "textformat"
-        case .textHighlight:
-            "highlighter"
         case .smartTextHighlight:
             "sparkles"
         case .highlight:
@@ -218,8 +213,6 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             "O"
         case .text:
             "T"
-        case .textHighlight:
-            "M"
         case .smartTextHighlight:
             "S"
         case .highlight:
@@ -257,8 +250,6 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             .oval
         case .text:
             .text
-        case .textHighlight:
-            .textHighlight
         case .smartTextHighlight:
             .smartTextHighlight
         case .highlight:
@@ -281,7 +272,6 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         .filledRectangle,
         .oval,
         .text,
-        .textHighlight,
         .smartTextHighlight,
         .highlight,
         .blurPixelate,
@@ -551,7 +541,7 @@ final class EditorViewModel: ObservableObject {
             copy()
         case .save:
             save()
-        case .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .textHighlight, .smartTextHighlight, .highlight, .blurPixelate, .crop:
+        case .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop:
             break
         }
     }
@@ -570,7 +560,7 @@ final class EditorViewModel: ObservableObject {
             canUndo
         case .redo:
             canRedo
-        case .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .textHighlight, .smartTextHighlight, .highlight, .blurPixelate, .crop, .copy, .save:
+        case .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop, .copy, .save:
             true
         }
     }
@@ -1259,9 +1249,6 @@ final class EditorViewModel: ObservableObject {
             return true
         case "t":
             selectTool(.text)
-            return true
-        case "m":
-            selectTool(.textHighlight)
             return true
         case "s":
             selectTool(.smartTextHighlight)
