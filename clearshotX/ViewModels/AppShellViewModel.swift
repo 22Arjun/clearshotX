@@ -20,6 +20,7 @@ final class AppShellViewModel: ObservableObject {
     @Published private(set) var regionMagnifierMode: RegionMagnifierMode
     @Published private(set) var regionMagnifierZoom: RegionMagnifierZoom
     @Published private(set) var regionMagnifierSize: RegionMagnifierSize
+    @Published private(set) var regionMagnifierShowsPixelColor: Bool
     @Published private(set) var captureSaveMode: CaptureSaveMode
     @Published private(set) var captureSaveFolderPath: String?
     @Published private(set) var hasDefaultCaptureFolderAuthorization: Bool
@@ -103,6 +104,7 @@ final class AppShellViewModel: ObservableObject {
         self.regionMagnifierMode = resolvedRegionCapturePreferences.magnifierMode
         self.regionMagnifierZoom = resolvedRegionCapturePreferences.magnifierZoom
         self.regionMagnifierSize = resolvedRegionCapturePreferences.magnifierSize
+        self.regionMagnifierShowsPixelColor = resolvedRegionCapturePreferences.magnifierShowsPixelColor
         self.captureSaveMode = resolvedSavePreferences.mode
         self.captureSaveFolderPath = resolvedSavePreferences.captureFolderDisplayPath
         self.hasDefaultCaptureFolderAuthorization = resolvedSavePreferences.hasDefaultFolderAuthorization
@@ -168,7 +170,8 @@ final class AppShellViewModel: ObservableObject {
             guard let region = await regionSelectionManager.selectRegion(
                 magnifierMode: regionMagnifierMode,
                 magnifierZoom: regionMagnifierZoom,
-                magnifierSize: regionMagnifierSize
+                magnifierSize: regionMagnifierSize,
+                magnifierShowsPixelColor: regionMagnifierShowsPixelColor
             ) else {
                 return
             }
@@ -243,6 +246,11 @@ final class AppShellViewModel: ObservableObject {
     func setRegionMagnifierSize(_ size: RegionMagnifierSize) {
         regionCapturePreferences.magnifierSize = size
         regionMagnifierSize = size
+    }
+
+    func setRegionMagnifierShowsPixelColor(_ showsPixelColor: Bool) {
+        regionCapturePreferences.magnifierShowsPixelColor = showsPixelColor
+        regionMagnifierShowsPixelColor = showsPixelColor
     }
 
     func setCaptureSaveMode(_ mode: CaptureSaveMode) {

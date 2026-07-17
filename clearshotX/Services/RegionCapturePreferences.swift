@@ -90,6 +90,7 @@ final class RegionCapturePreferences {
         static let magnifierMode = "RegionCaptureMagnifierMode"
         static let magnifierZoom = "RegionCaptureMagnifierZoom"
         static let magnifierSize = "RegionCaptureMagnifierSize"
+        static let magnifierShowsPixelColor = "RegionCaptureMagnifierShowsPixelColor"
     }
 
     private let userDefaults: UserDefaults
@@ -99,7 +100,8 @@ final class RegionCapturePreferences {
         userDefaults.register(defaults: [
             UserDefaultsKey.magnifierMode: RegionMagnifierMode.automatic.rawValue,
             UserDefaultsKey.magnifierZoom: RegionMagnifierZoom.eight.rawValue,
-            UserDefaultsKey.magnifierSize: RegionMagnifierSize.medium.rawValue
+            UserDefaultsKey.magnifierSize: RegionMagnifierSize.medium.rawValue,
+            UserDefaultsKey.magnifierShowsPixelColor: false
         ])
     }
 
@@ -141,6 +143,15 @@ final class RegionCapturePreferences {
         }
         set {
             userDefaults.set(newValue.rawValue, forKey: UserDefaultsKey.magnifierSize)
+        }
+    }
+
+    var magnifierShowsPixelColor: Bool {
+        get {
+            userDefaults.bool(forKey: UserDefaultsKey.magnifierShowsPixelColor)
+        }
+        set {
+            userDefaults.set(newValue, forKey: UserDefaultsKey.magnifierShowsPixelColor)
         }
     }
 }

@@ -20,7 +20,8 @@ import ScreenCaptureKit
     func selectRegion(
         magnifierMode: RegionMagnifierMode,
         magnifierZoom: RegionMagnifierZoom,
-        magnifierSize: RegionMagnifierSize
+        magnifierSize: RegionMagnifierSize,
+        magnifierShowsPixelColor: Bool
     ) async -> CGRect? {
         guard !isSelecting else { return nil }
 
@@ -43,7 +44,8 @@ import ScreenCaptureKit
                 snapshots: snapshots,
                 magnifierMode: magnifierMode,
                 magnifierZoom: magnifierZoom,
-                magnifierSize: magnifierSize
+                magnifierSize: magnifierSize,
+                magnifierShowsPixelColor: magnifierShowsPixelColor
             )
         }
     }
@@ -85,7 +87,8 @@ import ScreenCaptureKit
         snapshots: [CGDirectDisplayID: CGImage],
         magnifierMode: RegionMagnifierMode,
         magnifierZoom: RegionMagnifierZoom,
-        magnifierSize: RegionMagnifierSize
+        magnifierSize: RegionMagnifierSize,
+        magnifierShowsPixelColor: Bool
     ) {
         overlayWindows = NSScreen.screens.map { screen in
             let window = RegionSelectionWindow(screen: screen)
@@ -95,7 +98,8 @@ import ScreenCaptureKit
                 backingScale: screen.backingScaleFactor,
                 magnifierMode: magnifierMode,
                 magnifierZoom: magnifierZoom,
-                magnifierSize: magnifierSize
+                magnifierSize: magnifierSize,
+                magnifierShowsPixelColor: magnifierShowsPixelColor
             )
 
             overlayView.onComplete = { [weak self, weak window] localRect in
@@ -409,6 +413,29 @@ private struct RegionLoupePlacement {
     }
 }
 
+private struct RegionPixelColor {
+    let red: Int
+    let green: Int
+    let blue: Int
+
+    var hex: String {
+        String(format: "#%02X%02X%02X", red, green, blue)
+    }
+
+    var rgb: String {
+        "RGB \(red) \(green) \(blue)"
+    }
+
+    var color: NSColor {
+        NSColor(
+            srgbRed: CGFloat(red) / 255,
+            green: CGFloat(green) / 255,
+            blue: CGFloat(blue) / 255,
+            alpha: 1
+        )
+    }
+}
+
 private final class RegionSelectionView: NSView {
     var onComplete: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
@@ -417,6 +444,7 @@ private final class RegionSelectionView: NSView {
     private let magnifierMode: RegionMagnifierMode
     private let magnifierZoom: RegionMagnifierZoom
     private let magnifierSize: RegionMagnifierSize
+    private let magnifierShowsPixelColor: Bool
     private let viewModel: RegionSelectionViewModel
     private var cursorTrackingArea: NSTrackingArea?
 
@@ -426,12 +454,14 @@ private final class RegionSelectionView: NSView {
         backingScale: CGFloat,
         magnifierMode: RegionMagnifierMode,
         magnifierZoom: RegionMagnifierZoom,
-        magnifierSize: RegionMagnifierSize
+        magnifierSize: RegionMagnifierSize,
+        magnifierShowsPixelColor: Bool
     ) {
         self.snapshot = snapshot
         self.magnifierMode = magnifierMode
         self.magnifierZoom = magnifierZoom
         self.magnifierSize = magnifierSize
+        self.magnifierShowsPixelColor = magnifierShowsPixelColor
         self.viewModel = RegionSelectionViewModel(
             bounds: NSRect(origin: .zero, size: frameRect.size), backingScale: backingScale)
         super.init(frame: frameRect)
@@ -624,21 +654,27 @@ private final class RegionSelectionView: NSView {
         let scaleY = CGFloat(snapshot.height) / bounds.height
         let pixelX = cursorPoint.x * scaleX
         let pixelY = (bounds.height - cursorPoint.y) * scaleY
-        let sampleWidthValue = CGFloat(sampleWidth)
-        let sampleHeightValue = CGFloat(sampleHeight)
+        let targetPixelX = min(
+            max(0, Int(floor(pixelX))),
+            snapshot.width - 1
+        )
+        let targetPixelY = min(
+            max(0, Int(floor(pixelY))),
+            snapshot.height - 1
+        )
         let cropOriginX = min(
-            max(0, floor(pixelX - sampleWidthValue / 2)),
-            CGFloat(snapshot.width - sampleWidth)
+            max(0, targetPixelX - sampleWidth / 2),
+            snapshot.width - sampleWidth
         )
         let cropOriginY = min(
-            max(0, floor(pixelY - sampleHeightValue / 2)),
-            CGFloat(snapshot.height - sampleHeight)
+            max(0, targetPixelY - sampleHeight / 2),
+            snapshot.height - sampleHeight
         )
         let cropRect = CGRect(
-            x: cropOriginX,
-            y: cropOriginY,
-            width: sampleWidthValue,
-            height: sampleHeightValue
+            x: CGFloat(cropOriginX),
+            y: CGFloat(cropOriginY),
+            width: CGFloat(sampleWidth),
+            height: CGFloat(sampleHeight)
         )
 
         guard let croppedImage = snapshot.cropping(to: cropRect) else { return }
@@ -681,6 +717,33 @@ private final class RegionSelectionView: NSView {
         )
         NSGraphicsContext.restoreGraphicsState()
 
+        let pixelSize = CGSize(
+            width: imageRect.width / CGFloat(sampleWidth),
+            height: imageRect.height / CGFloat(sampleHeight)
+        )
+        let targetPixelRect = CGRect(
+            x: imageRect.minX + CGFloat(targetPixelX - cropOriginX) * pixelSize.width,
+            y: imageRect.maxY
+                - CGFloat(targetPixelY - cropOriginY + 1) * pixelSize.height,
+            width: pixelSize.width,
+            height: pixelSize.height
+        )
+        drawLoupeCrosshair(in: imageRect, targetPixelRect: targetPixelRect)
+
+        if magnifierShowsPixelColor,
+           let pixelColor = pixelColor(
+               in: snapshot,
+               x: targetPixelX,
+               y: targetPixelY
+           ) {
+            drawPixelColorReadout(
+                pixelColor,
+                in: imageRect,
+                avoiding: targetPixelRect,
+                cornerRadius: innerCornerRadius
+            )
+        }
+
         let outline = NSBezierPath(
             roundedRect: loupeRect.insetBy(dx: 0.5, dy: 0.5),
             xRadius: outerCornerRadius,
@@ -689,14 +752,6 @@ private final class RegionSelectionView: NSView {
         outline.lineWidth = 1
         NSColor.white.withAlphaComponent(0.92).setStroke()
         outline.stroke()
-
-        drawLoupeCrosshair(
-            in: imageRect,
-            pixelSize: CGSize(
-                width: imageRect.width / CGFloat(sampleWidth),
-                height: imageRect.height / CGFloat(sampleHeight)
-            )
-        )
     }
 
     private func loupeRect(near cursorPoint: CGPoint) -> CGRect {
@@ -723,31 +778,160 @@ private final class RegionSelectionView: NSView {
         return min(maximum, oddCount)
     }
 
-    private func drawLoupeCrosshair(in rect: CGRect, pixelSize: CGSize) {
+    private func drawLoupeCrosshair(in rect: CGRect, targetPixelRect: CGRect) {
         let horizontal = NSBezierPath()
-        horizontal.move(to: CGPoint(x: rect.minX, y: rect.midY))
-        horizontal.line(to: CGPoint(x: rect.maxX, y: rect.midY))
+        horizontal.move(to: CGPoint(x: rect.minX, y: targetPixelRect.midY))
+        horizontal.line(to: CGPoint(x: rect.maxX, y: targetPixelRect.midY))
         horizontal.lineWidth = 1
 
         let vertical = NSBezierPath()
-        vertical.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        vertical.line(to: CGPoint(x: rect.midX, y: rect.maxY))
+        vertical.move(to: CGPoint(x: targetPixelRect.midX, y: rect.minY))
+        vertical.line(to: CGPoint(x: targetPixelRect.midX, y: rect.maxY))
         vertical.lineWidth = 1
 
         NSColor.black.withAlphaComponent(0.62).setStroke()
         horizontal.stroke()
         vertical.stroke()
 
-        let centerPixel = CGRect(
-            x: rect.midX - pixelSize.width / 2,
-            y: rect.midY - pixelSize.height / 2,
-            width: pixelSize.width,
-            height: pixelSize.height
-        )
-        let centerPath = NSBezierPath(rect: centerPixel)
+        let centerPath = NSBezierPath(rect: targetPixelRect)
         centerPath.lineWidth = 1
         NSColor.white.setStroke()
         centerPath.stroke()
+    }
+
+    private func pixelColor(in image: CGImage, x: Int, y: Int) -> RegionPixelColor? {
+        let pixelRect = CGRect(x: CGFloat(x), y: CGFloat(y), width: 1, height: 1)
+        guard let pixelImage = image.cropping(to: pixelRect) else {
+            return nil
+        }
+
+        var bytes = [UInt8](repeating: 0, count: 4)
+        let rendered = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let address = buffer.baseAddress,
+                  let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+                  let context = CGContext(
+                      data: address,
+                      width: 1,
+                      height: 1,
+                      bitsPerComponent: 8,
+                      bytesPerRow: 4,
+                      space: colorSpace,
+                      bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                          | CGImageAlphaInfo.premultipliedLast.rawValue
+                  )
+            else {
+                return false
+            }
+
+            context.interpolationQuality = .none
+            context.draw(pixelImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+
+        guard rendered else {
+            return nil
+        }
+
+        let alpha = Int(bytes[3])
+        func unpremultiplied(_ component: UInt8) -> Int {
+            guard alpha > 0, alpha < 255 else {
+                return Int(component)
+            }
+            return min(255, Int(component) * 255 / alpha)
+        }
+
+        return RegionPixelColor(
+            red: unpremultiplied(bytes[0]),
+            green: unpremultiplied(bytes[1]),
+            blue: unpremultiplied(bytes[2])
+        )
+    }
+
+    private func drawPixelColorReadout(
+        _ pixelColor: RegionPixelColor,
+        in imageRect: CGRect,
+        avoiding targetPixelRect: CGRect,
+        cornerRadius: CGFloat
+    ) {
+        let footerHeight = min(26, imageRect.height * 0.40)
+        let footerY = targetPixelRect.midY >= imageRect.midY
+            ? imageRect.minY
+            : imageRect.maxY - footerHeight
+        let footerRect = CGRect(
+            x: imageRect.minX,
+            y: footerY,
+            width: imageRect.width,
+            height: footerHeight
+        )
+
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(
+            roundedRect: imageRect,
+            xRadius: cornerRadius,
+            yRadius: cornerRadius
+        ).addClip()
+
+        NSColor.black.withAlphaComponent(0.84).setFill()
+        footerRect.fill()
+
+        let separator = NSBezierPath()
+        let separatorY = footerRect.minY == imageRect.minY
+            ? footerRect.maxY
+            : footerRect.minY
+        separator.move(to: CGPoint(x: footerRect.minX, y: separatorY))
+        separator.line(to: CGPoint(x: footerRect.maxX, y: separatorY))
+        separator.lineWidth = 1 / viewModel.backingScale
+        NSColor.white.withAlphaComponent(0.26).setStroke()
+        separator.stroke()
+
+        let swatchSide = min(14, footerRect.height - 10)
+        let swatchRect = CGRect(
+            x: footerRect.minX + 6,
+            y: footerRect.midY - swatchSide / 2,
+            width: swatchSide,
+            height: swatchSide
+        )
+        let swatchPath = NSBezierPath(roundedRect: swatchRect, xRadius: 3, yRadius: 3)
+        pixelColor.color.setFill()
+        swatchPath.fill()
+        NSColor.white.withAlphaComponent(0.72).setStroke()
+        swatchPath.lineWidth = 0.75
+        swatchPath.stroke()
+
+        let textX = swatchRect.maxX + 6
+        let textWidth = max(0, footerRect.maxX - textX - 4)
+        let hexText = NSAttributedString(
+            string: pixelColor.hex,
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold),
+                .foregroundColor: NSColor.white,
+            ]
+        )
+        let rgbText = NSAttributedString(
+            string: pixelColor.rgb,
+            attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: 7.5, weight: .medium),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.76),
+            ]
+        )
+        hexText.draw(
+            in: CGRect(
+                x: textX,
+                y: footerRect.midY,
+                width: textWidth,
+                height: footerRect.height / 2
+            )
+        )
+        rgbText.draw(
+            in: CGRect(
+                x: textX,
+                y: footerRect.minY + 3,
+                width: textWidth,
+                height: footerRect.height / 2
+            )
+        )
+
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func cancel() {

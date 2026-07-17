@@ -155,6 +155,25 @@ struct SettingsView: View {
                         .labelsHidden()
                         .frame(width: 190)
                     }
+
+                    Toggle(
+                        isOn: Binding(
+                            get: { viewModel.regionMagnifierShowsPixelColor },
+                            set: { viewModel.setRegionMagnifierShowsPixelColor($0) }
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show pixel color")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+
+                            Text("Display live HEX and RGB values inside the magnifier.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
                 }
                 .frame(width: 420)
                 .disabled(viewModel.regionMagnifierMode == .off)
