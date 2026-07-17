@@ -21,6 +21,7 @@ final class AppShellViewModel: ObservableObject {
     @Published private(set) var regionMagnifierZoom: RegionMagnifierZoom
     @Published private(set) var regionMagnifierSize: RegionMagnifierSize
     @Published private(set) var regionMagnifierShowsPixelColor: Bool
+    @Published private(set) var freezesScreenWhileSelecting: Bool
     @Published private(set) var captureSaveMode: CaptureSaveMode
     @Published private(set) var captureSaveFolderPath: String?
     @Published private(set) var hasDefaultCaptureFolderAuthorization: Bool
@@ -105,6 +106,7 @@ final class AppShellViewModel: ObservableObject {
         self.regionMagnifierZoom = resolvedRegionCapturePreferences.magnifierZoom
         self.regionMagnifierSize = resolvedRegionCapturePreferences.magnifierSize
         self.regionMagnifierShowsPixelColor = resolvedRegionCapturePreferences.magnifierShowsPixelColor
+        self.freezesScreenWhileSelecting = resolvedRegionCapturePreferences.freezesScreenWhileSelecting
         self.captureSaveMode = resolvedSavePreferences.mode
         self.captureSaveFolderPath = resolvedSavePreferences.captureFolderDisplayPath
         self.hasDefaultCaptureFolderAuthorization = resolvedSavePreferences.hasDefaultFolderAuthorization
@@ -167,17 +169,26 @@ final class AppShellViewModel: ObservableObject {
                 isCapturing = false
             }
 
-            guard let region = await regionSelectionManager.selectRegion(
-                magnifierMode: regionMagnifierMode,
-                magnifierZoom: regionMagnifierZoom,
-                magnifierSize: regionMagnifierSize,
-                magnifierShowsPixelColor: regionMagnifierShowsPixelColor
-            ) else {
-                return
-            }
-
             do {
-                let capture = try await screenCaptureService.captureRegion(region)
+                guard let selection = try await regionSelectionManager.selectRegion(
+                    magnifierMode: regionMagnifierMode,
+                    magnifierZoom: regionMagnifierZoom,
+                    magnifierSize: regionMagnifierSize,
+                    magnifierShowsPixelColor: regionMagnifierShowsPixelColor,
+                    freezesScreen: freezesScreenWhileSelecting
+                ) else {
+                    return
+                }
+
+                let capture: CaptureResult
+                if let frozenCaptures = selection.frozenCaptures {
+                    capture = try screenCaptureService.captureRegion(
+                        selection.region,
+                        from: frozenCaptures
+                    )
+                } else {
+                    capture = try await screenCaptureService.captureRegion(selection.region)
+                }
                 showQuickAccessOverlay(for: capture)
             } catch {
                 handleCaptureError(error)
@@ -251,6 +262,11 @@ final class AppShellViewModel: ObservableObject {
     func setRegionMagnifierShowsPixelColor(_ showsPixelColor: Bool) {
         regionCapturePreferences.magnifierShowsPixelColor = showsPixelColor
         regionMagnifierShowsPixelColor = showsPixelColor
+    }
+
+    func setFreezesScreenWhileSelecting(_ freezesScreen: Bool) {
+        regionCapturePreferences.freezesScreenWhileSelecting = freezesScreen
+        freezesScreenWhileSelecting = freezesScreen
     }
 
     func setCaptureSaveMode(_ mode: CaptureSaveMode) {

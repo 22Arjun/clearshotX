@@ -91,6 +91,7 @@ final class RegionCapturePreferences {
         static let magnifierZoom = "RegionCaptureMagnifierZoom"
         static let magnifierSize = "RegionCaptureMagnifierSize"
         static let magnifierShowsPixelColor = "RegionCaptureMagnifierShowsPixelColor"
+        static let freezesScreenWhileSelecting = "RegionCaptureFreezesScreenWhileSelecting"
     }
 
     private let userDefaults: UserDefaults
@@ -101,7 +102,8 @@ final class RegionCapturePreferences {
             UserDefaultsKey.magnifierMode: RegionMagnifierMode.automatic.rawValue,
             UserDefaultsKey.magnifierZoom: RegionMagnifierZoom.eight.rawValue,
             UserDefaultsKey.magnifierSize: RegionMagnifierSize.medium.rawValue,
-            UserDefaultsKey.magnifierShowsPixelColor: false
+            UserDefaultsKey.magnifierShowsPixelColor: false,
+            UserDefaultsKey.freezesScreenWhileSelecting: false
         ])
     }
 
@@ -152,6 +154,15 @@ final class RegionCapturePreferences {
         }
         set {
             userDefaults.set(newValue, forKey: UserDefaultsKey.magnifierShowsPixelColor)
+        }
+    }
+
+    var freezesScreenWhileSelecting: Bool {
+        get {
+            userDefaults.bool(forKey: UserDefaultsKey.freezesScreenWhileSelecting)
+        }
+        set {
+            userDefaults.set(newValue, forKey: UserDefaultsKey.freezesScreenWhileSelecting)
         }
     }
 }

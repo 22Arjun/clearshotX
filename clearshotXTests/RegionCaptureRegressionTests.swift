@@ -1,8 +1,28 @@
 import CoreGraphics
+import CoreMedia
+import CoreVideo
 import Foundation
 import XCTest
 
 @testable import clearshotX
+
+@MainActor
+final class RegionCapturePreferencesTests: XCTestCase {
+    func testFreezeScreenPreferenceDefaultsOffAndPersists() throws {
+        let suiteName = "RegionCapturePreferencesTests.\(UUID().uuidString)"
+        let userDefaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        userDefaults.removePersistentDomain(forName: suiteName)
+
+        let preferences = RegionCapturePreferences(userDefaults: userDefaults)
+        XCTAssertFalse(preferences.freezesScreenWhileSelecting)
+
+        preferences.freezesScreenWhileSelecting = true
+
+        let reloadedPreferences = RegionCapturePreferences(userDefaults: userDefaults)
+        XCTAssertTrue(reloadedPreferences.freezesScreenWhileSelecting)
+    }
+}
 
 @MainActor
 final class RegionSelectionGeometryTests: XCTestCase {
@@ -276,6 +296,65 @@ final class RegionRenderOptimizationTests: XCTestCase {
 
 @MainActor
 final class RegionCaptureCompositorTests: XCTestCase {
+    func testNativeRetinaSampleBufferKeepsResolutionAndBottomOriginSelection() throws {
+        let sampleBuffer = try makeRetinaSampleBuffer()
+        let capture = try XCTUnwrap(
+            DisplayRegionCapture(
+                sampleBuffer: sampleBuffer,
+                globalRect: CGRect(x: 0, y: 0, width: 2, height: 2),
+                scale: 2
+            )
+        )
+
+        let result = try ScreenCaptureService.compositeRegionImage(
+            from: [capture],
+            selectedRegion: CGRect(x: 0, y: 0, width: 2, height: 1)
+        )
+
+        XCTAssertEqual(capture.pixelWidth, 4)
+        XCTAssertEqual(capture.pixelHeight, 4)
+        XCTAssertEqual(result.width, 4)
+        XCTAssertEqual(result.height, 2)
+        assertPixel(result, x: 0, yFromTop: 0, red: 0, green: 0, blue: 255)
+        assertPixel(result, x: 3, yFromTop: 1, red: 0, green: 0, blue: 255)
+
+        let sampler = try XCTUnwrap(RegionPixelSampler(displayCapture: capture))
+        XCTAssertEqual(
+            sampler.color(x: 0, y: 0),
+            RegionPixelColor(red: 255, green: 0, blue: 0)
+        )
+        XCTAssertEqual(
+            sampler.color(x: 0, y: 3),
+            RegionPixelColor(red: 0, green: 0, blue: 255)
+        )
+    }
+
+    func testFrozenDisplaySnapshotExportsTheOriginallySelectedPixels() throws {
+        let snapshot = horizontalImage(
+            colors: [
+                (255, 0, 0),
+                (0, 255, 0),
+                (0, 0, 255),
+                (255, 255, 0),
+            ]
+        )
+        let result = try ScreenCaptureService.compositeRegionImage(
+            from: [
+                DisplayRegionCapture(
+                    image: snapshot,
+                    globalRect: CGRect(x: 0, y: 0, width: 4, height: 1),
+                    scale: 1
+                )
+            ],
+            selectedRegion: CGRect(x: 1, y: 0, width: 2, height: 1)
+        )
+
+        XCTAssertEqual(result.width, 2)
+        XCTAssertEqual(result.height, 1)
+        assertPixel(result, x: 0, yFromTop: 0, red: 0, green: 255, blue: 0)
+        assertPixel(result, x: 1, yFromTop: 0, red: 0, green: 0, blue: 255)
+    }
+
     func testVerticallyArrangedDisplayPiecesKeepCorrectOrientation() throws {
         let result = try ScreenCaptureService.compositeRegionImage(
             from: [
@@ -374,6 +453,93 @@ final class RegionCaptureCompositorTests: XCTestCase {
         )
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         return context.makeImage()!
+    }
+
+    private func horizontalImage(
+        colors: [(UInt8, UInt8, UInt8)]
+    ) -> CGImage {
+        let bytes = colors.flatMap { red, green, blue in
+            [red, green, blue, UInt8(255)]
+        }
+        let provider = CGDataProvider(data: Data(bytes) as CFData)!
+        return CGImage(
+            width: colors.count,
+            height: 1,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: colors.count * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+            ),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )!
+    }
+
+    private func makeRetinaSampleBuffer() throws -> CMSampleBuffer {
+        var optionalPixelBuffer: CVPixelBuffer?
+        let attributes = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
+        ] as CFDictionary
+        XCTAssertEqual(
+            CVPixelBufferCreate(
+                kCFAllocatorDefault,
+                4,
+                4,
+                kCVPixelFormatType_32BGRA,
+                attributes,
+                &optionalPixelBuffer
+            ),
+            kCVReturnSuccess
+        )
+        let pixelBuffer = try XCTUnwrap(optionalPixelBuffer)
+        XCTAssertEqual(CVPixelBufferLockBaseAddress(pixelBuffer, []), kCVReturnSuccess)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        let baseAddress = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixelBuffer))
+            .assumingMemoryBound(to: UInt8.self)
+        for y in 0..<4 {
+            for x in 0..<4 {
+                let pixel = baseAddress.advanced(by: y * bytesPerRow + x * 4)
+                let isTopHalf = y < 2
+                pixel[0] = isTopHalf ? 0 : 255
+                pixel[1] = 0
+                pixel[2] = isTopHalf ? 255 : 0
+                pixel[3] = 255
+            }
+        }
+
+        var optionalFormatDescription: CMVideoFormatDescription?
+        XCTAssertEqual(
+            CMVideoFormatDescriptionCreateForImageBuffer(
+                allocator: kCFAllocatorDefault,
+                imageBuffer: pixelBuffer,
+                formatDescriptionOut: &optionalFormatDescription
+            ),
+            noErr
+        )
+        let formatDescription = try XCTUnwrap(optionalFormatDescription)
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: .zero,
+            decodeTimeStamp: .invalid
+        )
+        var optionalSampleBuffer: CMSampleBuffer?
+        XCTAssertEqual(
+            CMSampleBufferCreateReadyWithImageBuffer(
+                allocator: kCFAllocatorDefault,
+                imageBuffer: pixelBuffer,
+                formatDescription: formatDescription,
+                sampleTiming: &timing,
+                sampleBufferOut: &optionalSampleBuffer
+            ),
+            noErr
+        )
+        return try XCTUnwrap(optionalSampleBuffer)
     }
 
     private func assertPixel(

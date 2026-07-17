@@ -6,14 +6,35 @@
 //
 
 import AppKit
+import AVFoundation
+import CoreMedia
+import CoreVideo
 import QuartzCore
 import ScreenCaptureKit
+
+struct RegionSelectionResult {
+    let region: CGRect
+    let frozenCaptures: [DisplayRegionCapture]?
+}
+
+enum RegionSelectionManagerError: LocalizedError {
+    case frozenSnapshotUnavailable
+
+    var errorDescription: String? {
+        "Could Not Freeze Every Display"
+    }
+
+    var recoverySuggestion: String? {
+        "ClearshotX could not snapshot every connected display before selection. Try again, disconnect an unavailable display, or turn off Freeze screen while selecting in Settings."
+    }
+}
 
 @MainActor final class RegionSelectionManager {
     private let captureDelay: Duration = .milliseconds(50)
 
     private var overlayWindows: [RegionSelectionWindow] = []
-    private var continuation: CheckedContinuation<CGRect?, Never>?
+    private var continuation: CheckedContinuation<RegionSelectionResult?, Never>?
+    private var activeFrozenCaptures: [DisplayRegionCapture]?
     private var escapeMonitor: Any?
     private var cursorMonitor: Any?
     private var isSelecting = false
@@ -22,19 +43,32 @@ import ScreenCaptureKit
         magnifierMode: RegionMagnifierMode,
         magnifierZoom: RegionMagnifierZoom,
         magnifierSize: RegionMagnifierSize,
-        magnifierShowsPixelColor: Bool
-    ) async -> CGRect? {
+        magnifierShowsPixelColor: Bool,
+        freezesScreen: Bool
+    ) async throws -> RegionSelectionResult? {
         guard !isSelecting else { return nil }
 
         isSelecting = true
-        let snapshots: [CGDirectDisplayID: CGImage]
-        if magnifierMode == .off {
+        let snapshots: [CGDirectDisplayID: DisplayRegionCapture]
+        if magnifierMode == .off, !freezesScreen {
             snapshots = [:]
         } else {
             snapshots = await captureScreenSnapshots()
         }
 
+        if freezesScreen {
+            let frozenCaptures = Array(snapshots.values)
+            guard frozenCaptures.count == NSScreen.screens.count else {
+                isSelecting = false
+                throw RegionSelectionManagerError.frozenSnapshotUnavailable
+            }
+            activeFrozenCaptures = frozenCaptures
+        } else {
+            activeFrozenCaptures = nil
+        }
+
         guard !Task.isCancelled else {
+            activeFrozenCaptures = nil
             isSelecting = false
             return nil
         }
@@ -46,18 +80,19 @@ import ScreenCaptureKit
                 magnifierMode: magnifierMode,
                 magnifierZoom: magnifierZoom,
                 magnifierSize: magnifierSize,
-                magnifierShowsPixelColor: magnifierShowsPixelColor
+                magnifierShowsPixelColor: magnifierShowsPixelColor,
+                freezesScreen: freezesScreen
             )
         }
     }
 
-    private func captureScreenSnapshots() async -> [CGDirectDisplayID: CGImage] {
+    private func captureScreenSnapshots() async -> [CGDirectDisplayID: DisplayRegionCapture] {
         guard let content = try? await SCShareableContent.current else { return [:] }
 
         let excludedApplications = content.applications.filter { application in
             application.bundleIdentifier == Bundle.main.bundleIdentifier
         }
-        var snapshots: [CGDirectDisplayID: CGImage] = [:]
+        var snapshots: [CGDirectDisplayID: DisplayRegionCapture] = [:]
 
         for screen in NSScreen.screens {
             guard let displayID = screen.displayID,
@@ -69,15 +104,31 @@ import ScreenCaptureKit
             filter.includeMenuBar = true
 
             let configuration = SCStreamConfiguration()
-            configuration.width = display.width
-            configuration.height = display.height
+            let pointScale = max(1, CGFloat(filter.pointPixelScale))
+            let contentSize = filter.contentRect.size
+            let pointSize = contentSize.width > 0 && contentSize.height > 0
+                ? contentSize
+                : screen.frame.size
+            configuration.width = max(1, Int((pointSize.width * pointScale).rounded()))
+            configuration.height = max(1, Int((pointSize.height * pointScale).rounded()))
             configuration.showsCursor = false
             configuration.scalesToFit = false
+            configuration.captureResolution = .best
+            configuration.pixelFormat = kCVPixelFormatType_32BGRA
 
-            if let image = try? await SCScreenshotManager.captureImage(
-                contentFilter: filter, configuration: configuration)
-            {
-                snapshots[displayID] = image
+            if let sampleBuffer = try? await SCScreenshotManager.captureSampleBuffer(
+                contentFilter: filter,
+                configuration: configuration
+            ), let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                let horizontalScale = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+                    / screen.frame.width
+                let verticalScale = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+                    / screen.frame.height
+                snapshots[displayID] = DisplayRegionCapture(
+                    sampleBuffer: sampleBuffer,
+                    globalRect: screen.frame,
+                    scale: max(1, min(horizontalScale, verticalScale))
+                )
             }
         }
 
@@ -85,11 +136,12 @@ import ScreenCaptureKit
     }
 
     private func showOverlays(
-        snapshots: [CGDirectDisplayID: CGImage],
+        snapshots: [CGDirectDisplayID: DisplayRegionCapture],
         magnifierMode: RegionMagnifierMode,
         magnifierZoom: RegionMagnifierZoom,
         magnifierSize: RegionMagnifierSize,
-        magnifierShowsPixelColor: Bool
+        magnifierShowsPixelColor: Bool,
+        freezesScreen: Bool
     ) {
         let screens = NSScreen.screens
         let desktopBounds = screens.reduce(CGRect.null) { bounds, screen in
@@ -106,17 +158,22 @@ import ScreenCaptureKit
         )
 
         overlayWindows = screens.map { screen in
-            let window = RegionSelectionWindow(screen: screen)
+            let snapshot = screen.displayID.flatMap { snapshots[$0] }
             let overlayView = RegionSelectionView(
                 frame: NSRect(origin: .zero, size: screen.frame.size),
                 screenFrame: screen.frame,
-                snapshot: screen.displayID.flatMap { snapshots[$0] },
+                snapshot: snapshot,
                 backingScale: screen.backingScaleFactor,
                 viewModel: viewModel,
                 magnifierMode: magnifierMode,
                 magnifierZoom: magnifierZoom,
                 magnifierSize: magnifierSize,
                 magnifierShowsPixelColor: magnifierShowsPixelColor
+            )
+            let window = RegionSelectionWindow(
+                screen: screen,
+                selectionView: overlayView,
+                frozenSampleBuffer: freezesScreen ? snapshot?.sampleBuffer : nil
             )
 
             overlayView.onComplete = { [weak self] globalRect in
@@ -126,11 +183,10 @@ import ScreenCaptureKit
             overlayView.onCancel = { [weak self] in self?.finish(with: nil) }
             overlayView.onChange = { [weak self] in
                 self?.overlayWindows.forEach { window in
-                    (window.contentView as? RegionSelectionView)?.scheduleRenderUpdate()
+                    window.selectionView.scheduleRenderUpdate()
                 }
             }
 
-            window.contentView = overlayView
             return window
         }
 
@@ -149,12 +205,10 @@ import ScreenCaptureKit
         let activeWindow =
             overlayWindows.first { $0.frame.contains(mouseLocation) } ?? overlayWindows.first
         activeWindow?.makeKeyAndOrderFront(nil)
-        activeWindow?.makeFirstResponder(activeWindow?.contentView)
+        activeWindow?.makeFirstResponder(activeWindow?.selectionView)
 
         overlayWindows.forEach { window in
-            if let contentView = window.contentView {
-                window.invalidateCursorRects(for: contentView)
-            }
+            window.invalidateCursorRects(for: window.selectionView)
         }
         enforceCrosshairCursor()
 
@@ -207,6 +261,8 @@ import ScreenCaptureKit
         guard let continuation else { return }
 
         self.continuation = nil
+        let frozenCaptures = activeFrozenCaptures
+        activeFrozenCaptures = nil
         removeEscapeMonitor()
         removeCursorMonitor()
 
@@ -218,18 +274,33 @@ import ScreenCaptureKit
 
         NSCursor.arrow.set()
 
+        let result = rect.map {
+            RegionSelectionResult(
+                region: $0,
+                frozenCaptures: frozenCaptures
+            )
+        }
         let captureDelay = self.captureDelay
         Task { @MainActor [weak self] in
-            if rect != nil { try? await Task.sleep(for: captureDelay) }
+            if result != nil, frozenCaptures == nil {
+                try? await Task.sleep(for: captureDelay)
+            }
 
-            continuation.resume(returning: rect)
+            continuation.resume(returning: result)
             self?.isSelecting = false
         }
     }
 }
 
 private final class RegionSelectionWindow: NSWindow {
-    init(screen: NSScreen) {
+    let selectionView: RegionSelectionView
+
+    init(
+        screen: NSScreen,
+        selectionView: RegionSelectionView,
+        frozenSampleBuffer: CMSampleBuffer?
+    ) {
+        self.selectionView = selectionView
         super.init(
             contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
 
@@ -241,11 +312,64 @@ private final class RegionSelectionWindow: NSWindow {
         acceptsMouseMovedEvents = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         animationBehavior = .none
+
+        contentView = RegionSelectionContainerView(
+            frame: NSRect(origin: .zero, size: screen.frame.size),
+            selectionView: selectionView,
+            frozenSampleBuffer: frozenSampleBuffer
+        )
     }
 
     override var canBecomeKey: Bool { true }
 
     override var canBecomeMain: Bool { false }
+}
+
+private final class RegionSelectionContainerView: NSView {
+    init(
+        frame frameRect: NSRect,
+        selectionView: RegionSelectionView,
+        frozenSampleBuffer: CMSampleBuffer?
+    ) {
+        super.init(frame: frameRect)
+
+        if let frozenSampleBuffer {
+            let frozenFrameView = FrozenFrameView(
+                frame: bounds,
+                sampleBuffer: frozenSampleBuffer
+            )
+            frozenFrameView.autoresizingMask = [.width, .height]
+            addSubview(frozenFrameView)
+        }
+
+        selectionView.frame = bounds
+        selectionView.autoresizingMask = [.width, .height]
+        addSubview(selectionView)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { nil }
+}
+
+private final class FrozenFrameView: NSView {
+    private let displayLayer = AVSampleBufferDisplayLayer()
+
+    init(frame frameRect: NSRect, sampleBuffer: CMSampleBuffer) {
+        super.init(frame: frameRect)
+
+        displayLayer.videoGravity = .resize
+        displayLayer.backgroundColor = NSColor.black.cgColor
+        wantsLayer = true
+        layer = displayLayer
+        CMSetAttachment(
+            sampleBuffer,
+            key: kCMSampleAttachmentKey_DisplayImmediately,
+            value: kCFBooleanTrue,
+            attachmentMode: kCMAttachmentMode_ShouldNotPropagate
+        )
+        displayLayer.enqueue(sampleBuffer)
+    }
+
+    @available(*, unavailable) required init?(coder: NSCoder) { nil }
 }
 
 struct RegionResizeModifiers: OptionSet, Equatable {
@@ -757,7 +881,12 @@ struct RegionPixelColor: Equatable {
 }
 
 final class RegionPixelSampler {
-    private let image: CGImage
+    private enum Source {
+        case image(CGImage)
+        case displayCapture(DisplayRegionCapture)
+    }
+
+    private let source: Source
     private let storage: UnsafeMutablePointer<UInt8>
     private let context: CGContext
 
@@ -782,7 +911,45 @@ final class RegionPixelSampler {
             return nil
         }
 
-        self.image = image
+        self.source = .image(image)
+        self.storage = storage
+        self.context = context
+        context.interpolationQuality = .none
+    }
+
+    convenience init?(displayCapture: DisplayRegionCapture) {
+        if displayCapture.sampleBuffer == nil,
+           let image = displayCapture.makeCGImage()
+        {
+            self.init(image: image)
+            return
+        }
+
+        self.init(displayCaptureSource: displayCapture)
+    }
+
+    private init?(displayCaptureSource: DisplayRegionCapture) {
+        let storage = UnsafeMutablePointer<UInt8>.allocate(capacity: 4)
+        storage.initialize(repeating: 0, count: 4)
+
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: storage,
+                  width: 1,
+                  height: 1,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 4,
+                  space: colorSpace,
+                  bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                      | CGImageAlphaInfo.premultipliedLast.rawValue
+              )
+        else {
+            storage.deinitialize(count: 4)
+            storage.deallocate()
+            return nil
+        }
+
+        source = .displayCapture(displayCaptureSource)
         self.storage = storage
         self.context = context
         context.interpolationQuality = .none
@@ -794,6 +961,16 @@ final class RegionPixelSampler {
     }
 
     func color(x: Int, y: Int) -> RegionPixelColor? {
+        switch source {
+        case let .displayCapture(displayCapture):
+            return displayCapture.pixelColor(x: x, yFromTop: y)
+
+        case let .image(image):
+            return color(in: image, x: x, y: y)
+        }
+    }
+
+    private func color(in image: CGImage, x: Int, y: Int) -> RegionPixelColor? {
         guard x >= 0, x < image.width, y >= 0, y < image.height else {
             return nil
         }
@@ -925,7 +1102,7 @@ private final class RegionSelectionView: NSView {
     var onChange: (() -> Void)?
 
     private let screenFrame: CGRect
-    private let snapshot: CGImage?
+    private let snapshot: DisplayRegionCapture?
     private let backingScale: CGFloat
     private let magnifierMode: RegionMagnifierMode
     private let magnifierZoom: RegionMagnifierZoom
@@ -945,7 +1122,7 @@ private final class RegionSelectionView: NSView {
     init(
         frame frameRect: NSRect,
         screenFrame: CGRect,
-        snapshot: CGImage?,
+        snapshot: DisplayRegionCapture?,
         backingScale: CGFloat,
         viewModel: RegionSelectionViewModel,
         magnifierMode: RegionMagnifierMode,
@@ -962,7 +1139,7 @@ private final class RegionSelectionView: NSView {
         self.magnifierShowsPixelColor = magnifierShowsPixelColor
         self.viewModel = viewModel
         self.pixelSampler = magnifierShowsPixelColor
-            ? snapshot.flatMap { RegionPixelSampler(image: $0) }
+            ? snapshot.flatMap { RegionPixelSampler(displayCapture: $0) }
             : nil
         super.init(frame: frameRect)
     }
@@ -1324,33 +1501,33 @@ private final class RegionSelectionView: NSView {
         let imageRect = loupeRect.insetBy(dx: contentInset, dy: contentInset)
         let sampleWidth = samplePixelCount(
             for: imageRect.width,
-            maximum: snapshot.width
+            maximum: snapshot.pixelWidth
         )
         let sampleHeight = samplePixelCount(
             for: imageRect.height,
-            maximum: snapshot.height
+            maximum: snapshot.pixelHeight
         )
         guard sampleWidth > 0, sampleHeight > 0 else { return }
 
-        let scaleX = CGFloat(snapshot.width) / bounds.width
-        let scaleY = CGFloat(snapshot.height) / bounds.height
+        let scaleX = CGFloat(snapshot.pixelWidth) / bounds.width
+        let scaleY = CGFloat(snapshot.pixelHeight) / bounds.height
         let pixelX = cursorPoint.x * scaleX
         let pixelY = (bounds.height - cursorPoint.y) * scaleY
         let targetPixelX = min(
             max(0, Int(floor(pixelX))),
-            snapshot.width - 1
+            snapshot.pixelWidth - 1
         )
         let targetPixelY = min(
             max(0, Int(floor(pixelY))),
-            snapshot.height - 1
+            snapshot.pixelHeight - 1
         )
         let cropOriginX = min(
             max(0, targetPixelX - sampleWidth / 2),
-            snapshot.width - sampleWidth
+            snapshot.pixelWidth - sampleWidth
         )
         let cropOriginY = min(
             max(0, targetPixelY - sampleHeight / 2),
-            snapshot.height - sampleHeight
+            snapshot.pixelHeight - sampleHeight
         )
         let cropRect = CGRect(
             x: CGFloat(cropOriginX),
@@ -1359,7 +1536,9 @@ private final class RegionSelectionView: NSView {
             height: CGFloat(sampleHeight)
         )
 
-        guard let croppedImage = snapshot.cropping(to: cropRect) else { return }
+        guard let croppedImage = snapshot.makeCGImage(
+            croppingToTopLeftPixelRect: cropRect
+        ) else { return }
 
         let outerCornerRadius: CGFloat = 14
         let innerCornerRadius: CGFloat = 9

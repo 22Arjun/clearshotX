@@ -6,7 +6,10 @@
 //
 
 import AppKit
+import CoreImage
 import CoreGraphics
+import CoreMedia
+import CoreVideo
 import Foundation
 import ScreenCaptureKit
 
@@ -43,9 +46,118 @@ enum ScreenCaptureServiceError: LocalizedError {
 }
 
 struct DisplayRegionCapture {
-    let image: CGImage
+    private enum Storage {
+        case image(CGImage)
+        case sampleBuffer(CMSampleBuffer, CVPixelBuffer)
+    }
+
+    private static let imageContext = CIContext(options: [
+        .cacheIntermediates: false
+    ])
+
+    private let storage: Storage
     let globalRect: CGRect
     let scale: CGFloat
+
+    init(image: CGImage, globalRect: CGRect, scale: CGFloat) {
+        storage = .image(image)
+        self.globalRect = globalRect
+        self.scale = scale
+    }
+
+    init?(sampleBuffer: CMSampleBuffer, globalRect: CGRect, scale: CGFloat) {
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return nil
+        }
+
+        storage = .sampleBuffer(sampleBuffer, pixelBuffer)
+        self.globalRect = globalRect
+        self.scale = scale
+    }
+
+    var sampleBuffer: CMSampleBuffer? {
+        guard case let .sampleBuffer(sampleBuffer, _) = storage else { return nil }
+        return sampleBuffer
+    }
+
+    var pixelWidth: Int {
+        switch storage {
+        case let .image(image):
+            image.width
+        case let .sampleBuffer(_, pixelBuffer):
+            CVPixelBufferGetWidth(pixelBuffer)
+        }
+    }
+
+    var pixelHeight: Int {
+        switch storage {
+        case let .image(image):
+            image.height
+        case let .sampleBuffer(_, pixelBuffer):
+            CVPixelBufferGetHeight(pixelBuffer)
+        }
+    }
+
+    func makeCGImage(croppingToTopLeftPixelRect requestedRect: CGRect? = nil) -> CGImage? {
+        let imageBounds = CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight)
+        let cropRect = (requestedRect ?? imageBounds)
+            .integral
+            .intersection(imageBounds)
+        guard !cropRect.isNull, cropRect.width > 0, cropRect.height > 0 else {
+            return nil
+        }
+
+        switch storage {
+        case let .image(image):
+            if cropRect == imageBounds { return image }
+            return image.cropping(to: cropRect)
+
+        case let .sampleBuffer(_, pixelBuffer):
+            // Core Image uses a bottom-left coordinate space while ScreenCaptureKit
+            // and CGImage crop rectangles use a top-left origin.
+            let coreImageRect = CGRect(
+                x: cropRect.minX,
+                y: CGFloat(pixelHeight) - cropRect.maxY,
+                width: cropRect.width,
+                height: cropRect.height
+            )
+            let image = CIImage(cvPixelBuffer: pixelBuffer)
+            return Self.imageContext.createCGImage(image, from: coreImageRect)
+        }
+    }
+
+    func pixelColor(x: Int, yFromTop: Int) -> RegionPixelColor? {
+        guard x >= 0, x < pixelWidth,
+              yFromTop >= 0, yFromTop < pixelHeight
+        else {
+            return nil
+        }
+
+        switch storage {
+        case .image:
+            return nil
+
+        case let .sampleBuffer(_, pixelBuffer):
+            guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA else {
+                return nil
+            }
+            guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
+                return nil
+            }
+            defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+            guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return nil }
+            let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+            let pixel = baseAddress
+                .advanced(by: yFromTop * bytesPerRow + x * 4)
+                .assumingMemoryBound(to: UInt8.self)
+            return RegionPixelColor(
+                red: Int(pixel[2]),
+                green: Int(pixel[1]),
+                blue: Int(pixel[0])
+            )
+        }
+    }
 }
 
 final class ScreenCaptureService {
@@ -106,6 +218,7 @@ final class ScreenCaptureService {
         configuration.height = pixelSize.height
         configuration.showsCursor = false
         configuration.scalesToFit = false
+        configuration.captureResolution = .best
 
         let cgImage = try await SCScreenshotManager.captureImage(
             contentFilter: filter,
@@ -182,7 +295,10 @@ final class ScreenCaptureService {
            let onlyDisplayFrame = displayRegions.first?.frame,
            onlyDisplayFrame.contains(region)
         {
-            cgImage = captures[0].image
+            guard let image = captures[0].makeCGImage() else {
+                throw ScreenCaptureServiceError.noImageReturned
+            }
+            cgImage = image
         } else {
             cgImage = try Self.compositeRegionImage(from: captures, selectedRegion: region)
         }
@@ -204,6 +320,68 @@ final class ScreenCaptureService {
             pixelWidth: cgImage.width,
             pixelHeight: cgImage.height,
             screenFrame: presentationDisplay?.frame ?? region
+        )
+    }
+
+    func captureRegion(
+        _ region: CGRect,
+        from frozenCaptures: [DisplayRegionCapture]
+    ) throws -> CaptureResult {
+        guard region.width > 0, region.height > 0 else {
+            throw ScreenCaptureServiceError.invalidRegion
+        }
+
+        let participatingCaptures = frozenCaptures.filter { capture in
+            let intersection = capture.globalRect.intersection(region)
+            return !intersection.isNull
+                && intersection.width > 0
+                && intersection.height > 0
+        }
+        guard !participatingCaptures.isEmpty else {
+            throw ScreenCaptureServiceError.noDisplayAvailable
+        }
+
+        let cgImage: CGImage
+        if participatingCaptures.count == 1,
+           let capture = participatingCaptures.first,
+           capture.globalRect.contains(region)
+        {
+            let outputRect = region.pixelAligned(scale: capture.scale)
+            let sourceRect = CGRect(
+                x: (outputRect.minX - capture.globalRect.minX) * capture.scale,
+                y: (capture.globalRect.maxY - outputRect.maxY) * capture.scale,
+                width: outputRect.width * capture.scale,
+                height: outputRect.height * capture.scale
+            )
+            guard let croppedImage = capture.makeCGImage(
+                croppingToTopLeftPixelRect: sourceRect
+            ) else {
+                throw ScreenCaptureServiceError.noImageReturned
+            }
+            cgImage = croppedImage
+        } else {
+            cgImage = try Self.compositeRegionImage(
+                from: participatingCaptures,
+                selectedRegion: region
+            )
+        }
+        let presentationCapture = participatingCaptures.max { lhs, rhs in
+            lhs.globalRect.intersection(region).area
+                < rhs.globalRect.intersection(region).area
+        }
+        let storedCapture = try captureStore.store(cgImage)
+        let image = NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
+
+        return CaptureResult(
+            image: image,
+            fileURL: storedCapture.fileURL,
+            dragFileURL: storedCapture.dragFileURL,
+            pixelWidth: cgImage.width,
+            pixelHeight: cgImage.height,
+            screenFrame: presentationCapture?.globalRect ?? region
         )
     }
 
@@ -248,6 +426,7 @@ final class ScreenCaptureService {
         configuration.height = max(1, Int((sourceRect.height * scale).rounded()))
         configuration.showsCursor = false
         configuration.scalesToFit = false
+        configuration.captureResolution = .best
 
         let image = try await SCScreenshotManager.captureImage(
             contentFilter: filter,
@@ -298,16 +477,36 @@ final class ScreenCaptureService {
         context.fill(CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
 
         for capture in captures {
+            let intersection = capture.globalRect.intersection(outputRect)
+            guard !intersection.isNull,
+                  intersection.width > 0,
+                  intersection.height > 0
+            else {
+                continue
+            }
+
+            let sourceRect = CGRect(
+                x: (intersection.minX - capture.globalRect.minX) * capture.scale,
+                y: (capture.globalRect.maxY - intersection.maxY) * capture.scale,
+                width: intersection.width * capture.scale,
+                height: intersection.height * capture.scale
+            )
+            guard let sourceImage = capture.makeCGImage(
+                croppingToTopLeftPixelRect: sourceRect
+            ) else {
+                throw ScreenCaptureServiceError.noImageReturned
+            }
+
             // Use the highest intersected display scale for a coherent canvas.
             // Lower-density display pieces are resampled; Retina pieces stay native.
             let destinationRect = CGRect(
-                x: (capture.globalRect.minX - outputRect.minX) * outputScale,
-                y: (capture.globalRect.minY - outputRect.minY) * outputScale,
-                width: capture.globalRect.width * outputScale,
-                height: capture.globalRect.height * outputScale
+                x: (intersection.minX - outputRect.minX) * outputScale,
+                y: (intersection.minY - outputRect.minY) * outputScale,
+                width: intersection.width * outputScale,
+                height: intersection.height * outputScale
             )
             context.interpolationQuality = capture.scale == outputScale ? .none : .high
-            context.draw(capture.image, in: destinationRect)
+            context.draw(sourceImage, in: destinationRect)
         }
 
         guard let image = context.makeImage() else {
@@ -363,6 +562,7 @@ final class ScreenCaptureService {
         configuration.height = pixelSize.height
         configuration.showsCursor = false
         configuration.scalesToFit = false
+        configuration.captureResolution = .best
 
         let cgImage = try await SCScreenshotManager.captureImage(
             contentFilter: filter,

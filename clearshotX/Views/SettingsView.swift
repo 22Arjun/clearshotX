@@ -87,6 +87,26 @@ struct SettingsView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color(nsColor: .labelColor))
 
+                Toggle(
+                    isOn: Binding(
+                        get: { viewModel.freezesScreenWhileSelecting },
+                        set: { viewModel.setFreezesScreenWhileSelecting($0) }
+                    )
+                ) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Freeze screen while selecting")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color(nsColor: .labelColor))
+
+                        Text("Keep animations, videos, and moving content fixed until the region is captured.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(nsColor: .tertiaryLabelColor))
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .frame(width: 420)
+
                 Picker(
                     "Pixel magnifier",
                     selection: Binding(
