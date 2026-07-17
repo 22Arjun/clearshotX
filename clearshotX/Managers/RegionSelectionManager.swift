@@ -239,7 +239,12 @@ private final class RegionSelectionViewModel {
     private(set) var currentPoint: CGPoint?
     private(set) var cursorPoint: CGPoint?
 
+    private var movementAnchor: CGPoint?
+    private var movementStartPoint: CGPoint?
+    private var movementCurrentPoint: CGPoint?
+
     var hasStartedSelection: Bool { startPoint != nil }
+    var isMovingSelection: Bool { movementAnchor != nil }
 
     init(bounds: CGRect, backingScale: CGFloat) {
         self.bounds = bounds
@@ -279,9 +284,117 @@ private final class RegionSelectionViewModel {
         cursorPoint = point
     }
 
+    func beginMovingSelection() {
+        guard !isMovingSelection,
+              let selectionRect,
+              selectionRect.width > 0,
+              selectionRect.height > 0,
+              let startPoint,
+              let currentPoint,
+              let cursorPoint
+        else {
+            return
+        }
+
+        movementAnchor = cursorPoint
+        movementStartPoint = startPoint
+        movementCurrentPoint = currentPoint
+    }
+
+    func moveSelection(to point: CGPoint) {
+        guard let movementAnchor,
+              let movementStartPoint,
+              let movementCurrentPoint
+        else {
+            return
+        }
+
+        let point = point.clamped(to: bounds)
+        let originalRect = CGRect(
+            x: min(movementStartPoint.x, movementCurrentPoint.x),
+            y: min(movementStartPoint.y, movementCurrentPoint.y),
+            width: abs(movementCurrentPoint.x - movementStartPoint.x),
+            height: abs(movementCurrentPoint.y - movementStartPoint.y)
+        )
+        let proposedDelta = CGVector(
+            dx: point.x - movementAnchor.x,
+            dy: point.y - movementAnchor.y
+        )
+        let delta = clampedTranslation(proposedDelta, for: originalRect)
+
+        startPoint = movementStartPoint.translated(by: delta)
+        currentPoint = movementCurrentPoint.translated(by: delta)
+        cursorPoint = point
+    }
+
+    func endMovingSelection() {
+        movementAnchor = nil
+        movementStartPoint = nil
+        movementCurrentPoint = nil
+    }
+
+    @discardableResult
+    func nudgeActiveCorner(by delta: CGVector) -> Bool {
+        guard let currentPoint else {
+            return false
+        }
+
+        let adjustedPoint = currentPoint.translated(by: delta).clamped(to: bounds)
+        self.currentPoint = adjustedPoint
+        cursorPoint = adjustedPoint
+        return true
+    }
+
+    @discardableResult
+    func nudgeSelection(by proposedDelta: CGVector) -> Bool {
+        guard let startPoint,
+              let currentPoint
+        else {
+            return false
+        }
+
+        let rawRect = CGRect(
+            x: min(startPoint.x, currentPoint.x),
+            y: min(startPoint.y, currentPoint.y),
+            width: abs(currentPoint.x - startPoint.x),
+            height: abs(currentPoint.y - startPoint.y)
+        )
+        guard rawRect.width > 0, rawRect.height > 0 else {
+            return false
+        }
+
+        let delta = clampedTranslation(proposedDelta, for: rawRect)
+        self.startPoint = startPoint.translated(by: delta)
+        self.currentPoint = currentPoint.translated(by: delta)
+
+        if isMovingSelection {
+            movementAnchor = self.currentPoint
+            movementStartPoint = self.startPoint
+            movementCurrentPoint = self.currentPoint
+            cursorPoint = self.currentPoint
+        } else {
+            cursorPoint = self.currentPoint
+        }
+        return delta.dx != 0 || delta.dy != 0
+    }
+
     func clearSelection() {
         startPoint = nil
         currentPoint = nil
+        endMovingSelection()
+    }
+
+    private func clampedTranslation(_ delta: CGVector, for rect: CGRect) -> CGVector {
+        CGVector(
+            dx: min(
+                max(delta.dx, bounds.minX - rect.minX),
+                bounds.maxX - rect.maxX
+            ),
+            dy: min(
+                max(delta.dy, bounds.minY - rect.minY),
+                bounds.maxY - rect.maxY
+            )
+        )
     }
 }
 
@@ -447,6 +560,8 @@ private final class RegionSelectionView: NSView {
     private let magnifierShowsPixelColor: Bool
     private let viewModel: RegionSelectionViewModel
     private var cursorTrackingArea: NSTrackingArea?
+    private var isSpacePressed = false
+    private var keyboardPointerOffset = CGVector.zero
 
     init(
         frame frameRect: NSRect,
@@ -527,19 +642,37 @@ private final class RegionSelectionView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         enforceCrosshairCursor()
+        keyboardPointerOffset = .zero
         viewModel.beginSelection(at: convert(event.locationInWindow, from: nil))
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
         enforceCrosshairCursor()
-        viewModel.updateSelection(to: convert(event.locationInWindow, from: nil))
+        let point = selectionPoint(for: event)
+        if isSpacePressed {
+            viewModel.beginMovingSelection()
+            if viewModel.isMovingSelection {
+                viewModel.moveSelection(to: point)
+            } else {
+                viewModel.updateSelection(to: point)
+            }
+        } else {
+            viewModel.endMovingSelection()
+            viewModel.updateSelection(to: point)
+        }
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
         enforceCrosshairCursor()
-        viewModel.updateSelection(to: convert(event.locationInWindow, from: nil))
+        let point = selectionPoint(for: event)
+        if viewModel.isMovingSelection {
+            viewModel.moveSelection(to: point)
+        } else {
+            viewModel.updateSelection(to: point)
+        }
+        viewModel.endMovingSelection()
 
         guard let selectionRect = viewModel.selectionRect,
             let dimensions = viewModel.pixelDimensions, dimensions.width >= 2,
@@ -553,12 +686,31 @@ private final class RegionSelectionView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {
+        switch event.keyCode {
+        case 53:
             cancel()
+        case 49:
+            if !event.isARepeat {
+                isSpacePressed = true
+                viewModel.beginMovingSelection()
+                needsDisplay = true
+            }
+        case 123, 124, 125, 126:
+            nudgeSelection(for: event)
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        guard event.keyCode == 49 else {
+            super.keyUp(with: event)
             return
         }
 
-        super.keyDown(with: event)
+        isSpacePressed = false
+        viewModel.endMovingSelection()
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -585,6 +737,48 @@ private final class RegionSelectionView: NSView {
 
     private func enforceCrosshairCursor() {
         NSCursor.crosshair.set()
+    }
+
+    private func nudgeSelection(for event: NSEvent) {
+        let pixelStep: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
+        let step = pixelStep / viewModel.backingScale
+        let delta: CGVector
+
+        switch event.keyCode {
+        case 123:
+            delta = CGVector(dx: -step, dy: 0)
+        case 124:
+            delta = CGVector(dx: step, dy: 0)
+        case 125:
+            delta = CGVector(dx: 0, dy: -step)
+        case 126:
+            delta = CGVector(dx: 0, dy: step)
+        default:
+            return
+        }
+
+        let previousCurrentPoint = viewModel.currentPoint
+        let didAdjust = isSpacePressed
+            ? viewModel.nudgeSelection(by: delta)
+            : viewModel.nudgeActiveCorner(by: delta)
+        guard didAdjust,
+              let previousCurrentPoint,
+              let currentPoint = viewModel.currentPoint
+        else {
+            return
+        }
+
+        keyboardPointerOffset.dx += currentPoint.x - previousCurrentPoint.x
+        keyboardPointerOffset.dy += currentPoint.y - previousCurrentPoint.y
+        needsDisplay = true
+    }
+
+    private func selectionPoint(for event: NSEvent) -> CGPoint {
+        let point = convert(event.locationInWindow, from: nil)
+        return CGPoint(
+            x: point.x + keyboardPointerOffset.dx,
+            y: point.y + keyboardPointerOffset.dy
+        ).clamped(to: bounds)
     }
 
     private func drawDimmedOverlay() {
@@ -935,6 +1129,8 @@ private final class RegionSelectionView: NSView {
     }
 
     private func cancel() {
+        isSpacePressed = false
+        keyboardPointerOffset = .zero
         viewModel.clearSelection()
         needsDisplay = true
         onCancel?()
@@ -950,6 +1146,10 @@ extension NSScreen {
 extension CGPoint {
     fileprivate func clamped(to rect: CGRect) -> CGPoint {
         CGPoint(x: min(max(rect.minX, x), rect.maxX), y: min(max(rect.minY, y), rect.maxY))
+    }
+
+    fileprivate func translated(by delta: CGVector) -> CGPoint {
+        CGPoint(x: x + delta.dx, y: y + delta.dy)
     }
 }
 
