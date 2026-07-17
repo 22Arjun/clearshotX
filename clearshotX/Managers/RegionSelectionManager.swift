@@ -236,6 +236,134 @@ private final class RegionSelectionViewModel {
     }
 }
 
+private enum RegionLoupeQuadrant: CaseIterable {
+    case upperRight
+    case upperLeft
+    case lowerRight
+    case lowerLeft
+
+    var direction: CGVector {
+        switch self {
+        case .upperRight:
+            CGVector(dx: 1, dy: 1)
+        case .upperLeft:
+            CGVector(dx: -1, dy: 1)
+        case .lowerRight:
+            CGVector(dx: 1, dy: -1)
+        case .lowerLeft:
+            CGVector(dx: -1, dy: -1)
+        }
+    }
+
+    func rect(near cursorPoint: CGPoint, size: CGSize, offset: CGFloat) -> CGRect {
+        let x = direction.dx > 0
+            ? cursorPoint.x + offset
+            : cursorPoint.x - size.width - offset
+        let y = direction.dy > 0
+            ? cursorPoint.y + offset
+            : cursorPoint.y - size.height - offset
+
+        return CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+}
+
+private struct RegionLoupePlacement {
+    private struct Candidate {
+        let index: Int
+        let rect: CGRect
+        let overflow: CGFloat
+        let selectionOverlap: CGFloat
+        let dragAlignment: CGFloat
+    }
+
+    static func rect(
+        near cursorPoint: CGPoint,
+        dragOrigin: CGPoint?,
+        selectionRect: CGRect?,
+        within bounds: CGRect,
+        size: CGSize,
+        offset: CGFloat,
+        edgeInset: CGFloat
+    ) -> CGRect {
+        let safeBounds = bounds.insetBy(dx: edgeInset, dy: edgeInset)
+        let avoidedSelection = selectionRect?.insetBy(dx: -12, dy: -12)
+        let dragDirection = dragOrigin.map {
+            CGVector(dx: cursorPoint.x - $0.x, dy: cursorPoint.y - $0.y)
+        }
+
+        let candidates = RegionLoupeQuadrant.allCases.enumerated().map { index, quadrant in
+            let rect = quadrant.rect(near: cursorPoint, size: size, offset: offset)
+            return Candidate(
+                index: index,
+                rect: rect,
+                overflow: overflowDistance(of: rect, outside: safeBounds),
+                selectionOverlap: overlapArea(of: rect, with: avoidedSelection),
+                dragAlignment: alignment(of: quadrant.direction, with: dragDirection)
+            )
+        }
+
+        let bestCandidate = candidates.min { lhs, rhs in
+            if lhs.overflow != rhs.overflow {
+                return lhs.overflow < rhs.overflow
+            }
+            if lhs.selectionOverlap != rhs.selectionOverlap {
+                return lhs.selectionOverlap < rhs.selectionOverlap
+            }
+            if lhs.dragAlignment != rhs.dragAlignment {
+                return lhs.dragAlignment > rhs.dragAlignment
+            }
+            return lhs.index < rhs.index
+        }
+
+        guard var rect = bestCandidate?.rect else {
+            return CGRect(origin: cursorPoint, size: size)
+        }
+
+        rect.origin.x = min(max(safeBounds.minX, rect.minX), safeBounds.maxX - rect.width)
+        rect.origin.y = min(max(safeBounds.minY, rect.minY), safeBounds.maxY - rect.height)
+        return rect
+    }
+
+    private static func overflowDistance(of rect: CGRect, outside bounds: CGRect) -> CGFloat {
+        max(0, bounds.minX - rect.minX)
+            + max(0, rect.maxX - bounds.maxX)
+            + max(0, bounds.minY - rect.minY)
+            + max(0, rect.maxY - bounds.maxY)
+    }
+
+    private static func overlapArea(of rect: CGRect, with otherRect: CGRect?) -> CGFloat {
+        guard let otherRect else {
+            return 0
+        }
+
+        let intersection = rect.intersection(otherRect)
+        guard !intersection.isNull else {
+            return 0
+        }
+
+        return intersection.width * intersection.height
+    }
+
+    private static func alignment(
+        of candidateDirection: CGVector,
+        with dragDirection: CGVector?
+    ) -> CGFloat {
+        guard let dragDirection else {
+            return 0
+        }
+
+        let dragLength = hypot(dragDirection.dx, dragDirection.dy)
+        guard dragLength >= 2 else {
+            return 0
+        }
+
+        return (
+            candidateDirection.dx * dragDirection.dx
+                + candidateDirection.dy * dragDirection.dy
+        ) / (sqrt(2) * dragLength)
+    }
+}
+
 private final class RegionSelectionView: NSView {
     var onComplete: ((CGRect) -> Void)?
     var onCancel: (() -> Void)?
@@ -448,15 +576,16 @@ private final class RegionSelectionView: NSView {
         let diameter: CGFloat = 104
         let offset: CGFloat = 22
         let edgeInset: CGFloat = 8
-        var x = cursorPoint.x + offset
-        var y = cursorPoint.y + offset
 
-        if x + diameter > bounds.maxX - edgeInset { x = cursorPoint.x - diameter - offset }
-        if y + diameter > bounds.maxY - edgeInset { y = cursorPoint.y - diameter - offset }
-
-        x = min(max(bounds.minX + edgeInset, x), bounds.maxX - diameter - edgeInset)
-        y = min(max(bounds.minY + edgeInset, y), bounds.maxY - diameter - edgeInset)
-        return CGRect(x: x, y: y, width: diameter, height: diameter)
+        return RegionLoupePlacement.rect(
+            near: cursorPoint,
+            dragOrigin: viewModel.startPoint,
+            selectionRect: viewModel.selectionRect,
+            within: bounds,
+            size: CGSize(width: diameter, height: diameter),
+            offset: offset,
+            edgeInset: edgeInset
+        )
     }
 
     private func drawLoupeCrosshair(in rect: CGRect) {
