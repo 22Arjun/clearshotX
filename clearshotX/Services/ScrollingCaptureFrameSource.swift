@@ -13,7 +13,10 @@ import ScreenCaptureKit
 /// Live ScreenCaptureKit source for one fixed, single-display scrolling viewport.
 /// Frame delivery is intentionally independent from stitching so capture lifecycle,
 /// UI, and the registration algorithm can evolve and be tested separately.
-nonisolated final class ScrollingCaptureFrameSource: NSObject, @unchecked Sendable {
+nonisolated final class ScrollingCaptureFrameSource: NSObject,
+    ScrollingCaptureFrameSourcing,
+    @unchecked Sendable
+{
     typealias FrameHandler = @Sendable (ScrollingCaptureStreamFrame) -> Void
     typealias FailureHandler = @Sendable (Error) -> Void
 

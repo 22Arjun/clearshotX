@@ -114,6 +114,14 @@ final class MenuBarStatusItemManager: NSObject, NSMenuDelegate {
                 isEnabled: viewModel?.isCapturing == false
             )
         )
+        menu.addItem(
+            item(
+                title: "Capture Scrolling Region",
+                systemImage: "arrow.down.to.line.compact",
+                action: #selector(captureScrollingRegion),
+                isEnabled: viewModel?.isCapturing == false
+            )
+        )
         menu.addItem(.separator())
         menu.addItem(
             item(
@@ -170,6 +178,10 @@ final class MenuBarStatusItemManager: NSObject, NSMenuDelegate {
 
     @objc private func captureWindow() {
         viewModel?.captureWindow()
+    }
+
+    @objc private func captureScrollingRegion() {
+        viewModel?.captureScrollingRegion()
     }
 
     @objc private func openScreenRecordingSettings() {

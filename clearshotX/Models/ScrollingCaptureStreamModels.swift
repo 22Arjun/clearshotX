@@ -32,6 +32,16 @@ nonisolated struct ScrollingCaptureStreamFrame: Sendable {
     let scaleFactor: CGFloat?
 }
 
+nonisolated protocol ScrollingCaptureFrameSourcing: AnyObject, Sendable {
+    func start(
+        selectedRegion: CGRect,
+        onFrame: @escaping @Sendable (ScrollingCaptureStreamFrame) -> Void,
+        onFailure: @escaping @Sendable (Error) -> Void
+    ) async throws -> ScrollingCaptureRegionGeometry
+
+    func stop() async throws
+}
+
 nonisolated enum ScrollingCaptureFrameSourceError: LocalizedError, Equatable {
     case alreadyRunning
     case noDisplayAvailable

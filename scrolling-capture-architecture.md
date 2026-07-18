@@ -80,6 +80,10 @@ One final Core Graphics render → CaptureStore → Quick Access
 
 `LatestValueProcessor` provides bounded backpressure. While analysis is busy, it keeps only the newest pending frame, so capture latency and memory cannot grow with the stream duration.
 
+`ScrollingCaptureCoordinator` now connects selection, streaming, stitching, final rendering, storage, and Quick Access as one guarded lifecycle. It serializes finish/cancel/error completion, assembles the final bitmap off the main actor, preserves a valid partial capture after a stream or analysis failure when at least one frame exists, and ignores stale callbacks using a per-capture identity.
+
+`ScrollingCaptureHUDManager` presents an app-excluded, non-activating panel next to the selected region. The HUD reports preparation, capture progress, native output dimensions, sustained low-confidence guidance, and finalization without taking keyboard focus away from the app being scrolled.
+
 The compositor keeps the initial viewport body plus only the newly revealed strip from each accepted frame. This avoids retaining duplicate frames and avoids repeatedly reallocating an ever-growing bitmap. A configured fixed header is retained from the first frame; a fixed footer is replaced and emitted from the final accepted frame.
 
 Regression tests cover exact displacement, duplicate rejection, ambiguous content, overlap removal, fixed bands, resizing, output limits, multi-display geometry, Retina pixel alignment, frame completeness, and latest-frame backpressure using deterministic inputs.
@@ -94,13 +98,20 @@ Regression tests cover exact displacement, duplicate rejection, ambiguous conten
 - Uses a serial processing queue with a one-frame latest-wins mailbox.
 - Converts only complete, correctly sized `CVPixelBuffer` frames to `CGImage`.
 
-### 1. Capture coordinator, HUD, and lifecycle
+### Completed: capture coordinator, HUD, and lifecycle
 
-- Reuse region selection, but require the scrolling region to stay on one display.
-- Show an excluded-app floating HUD outside the selected region with status: Ready, Scroll, Capturing, Paused, Limit reached, Finish, Cancel.
-- Start with user-driven scrolling. Accept Space/Return to finish and Escape to cancel.
-- Keep the first accepted frame immediately. During fast/blurred movement, reject silently; show a “scroll a little slower” hint only after a streak of low-confidence frames.
-- On window resize, display-scale change, selected content disappearing, or stream failure, stop safely and offer the valid partial capture.
+- Reuses the existing region selector and validates the result as a single-display stream region.
+- Adds a menu entry and excluded-app floating HUD with preparation, capture, guidance, finishing, Finish, and Cancel states.
+- Starts with user-driven scrolling and keeps focus in the target app; HUD buttons avoid requiring Input Monitoring permission for global key interception.
+- Keeps the first accepted frame immediately and shows “scroll a little slower” only after a sustained rejection streak.
+- Stops safely on output limits, analysis errors, stream failure, finish, or cancel; failures finalize a valid partial capture when possible.
+
+### 1. Live preview and capture controls
+
+- Add a bounded, downsampled live mosaic preview without rendering the full output on every accepted frame.
+- Add pause/resume so users can interact with expandable sections without feeding transitional frames into registration.
+- Add an optional, explicitly permissioned keyboard-control adapter for Finish/Cancel; keep HUD buttons as the universal path.
+- Surface “saved partial capture” distinctly from a normal finish when the stream ends unexpectedly.
 
 ### 2. Fixed and dynamic content handling
 

@@ -45,6 +45,16 @@ struct MenuBarContentView: View {
         }
         .disabled(viewModel.isCapturing)
 
+        Button {
+            viewModel.captureScrollingRegion()
+        } label: {
+            Label(
+                "Capture Scrolling Region",
+                systemImage: "arrow.down.to.line.compact"
+            )
+        }
+        .disabled(viewModel.isCapturing)
+
         Divider()
 
         Button {

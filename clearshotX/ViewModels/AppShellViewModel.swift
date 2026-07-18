@@ -36,6 +36,7 @@ final class AppShellViewModel: ObservableObject {
     private let editorWindowManager: EditorWindowManager
     private let quickAccessOverlayManager: QuickAccessOverlayManager
     private let regionSelectionManager: RegionSelectionManager
+    private let scrollingCaptureCoordinator: ScrollingCaptureCoordinator
     private let windowSelectionManager: WindowSelectionManager
     private let hotkeyConflictResolutionManager: HotkeyConflictResolutionManager
     private let hotkeySetupWindowManager: HotkeySetupWindowManager
@@ -58,6 +59,7 @@ final class AppShellViewModel: ObservableObject {
         editorWindowManager: EditorWindowManager? = nil,
         quickAccessOverlayManager: QuickAccessOverlayManager? = nil,
         regionSelectionManager: RegionSelectionManager? = nil,
+        scrollingCaptureCoordinator: ScrollingCaptureCoordinator? = nil,
         windowSelectionManager: WindowSelectionManager? = nil,
         hotkeyConflictResolutionManager: HotkeyConflictResolutionManager? = nil,
         hotkeySetupWindowManager: HotkeySetupWindowManager? = nil,
@@ -94,6 +96,8 @@ final class AppShellViewModel: ObservableObject {
             captureStore: resolvedCaptureStore
         )
         self.regionSelectionManager = regionSelectionManager ?? RegionSelectionManager()
+        self.scrollingCaptureCoordinator = scrollingCaptureCoordinator
+            ?? ScrollingCaptureCoordinator(captureStore: resolvedCaptureStore)
         self.windowSelectionManager = windowSelectionManager ?? WindowSelectionManager()
         self.hotkeyConflictResolutionManager = hotkeyConflictResolutionManager ?? HotkeyConflictResolutionManager()
         self.hotkeySetupWindowManager = hotkeySetupWindowManager ?? HotkeySetupWindowManager()
@@ -218,6 +222,54 @@ final class AppShellViewModel: ObservableObject {
                 let capture = try await screenCaptureService.captureWindow(window)
                 showQuickAccessOverlay(for: capture)
             } catch {
+                handleCaptureError(error)
+            }
+        }
+    }
+
+    func captureScrollingRegion() {
+        guard !isCapturing else { return }
+
+        if !screenCaptureService.hasScreenRecordingPermission() {
+            _ = screenCaptureService.requestScreenRecordingPermission()
+
+            guard screenCaptureService.hasScreenRecordingPermission() else {
+                handleCaptureError(ScreenCaptureServiceError.permissionDenied)
+                return
+            }
+        }
+
+        isCapturing = true
+        Task {
+            do {
+                guard let selection = try await regionSelectionManager.selectRegion(
+                    magnifierMode: regionMagnifierMode,
+                    magnifierZoom: regionMagnifierZoom,
+                    magnifierSize: regionMagnifierSize,
+                    magnifierShowsPixelColor: regionMagnifierShowsPixelColor,
+                    freezesScreen: false
+                ) else {
+                    isCapturing = false
+                    return
+                }
+
+                try await scrollingCaptureCoordinator.start(
+                    selectedRegion: selection.region
+                ) { [weak self] result in
+                    guard let self else { return }
+                    self.isCapturing = false
+
+                    switch result {
+                    case let .success(capture?):
+                        self.showQuickAccessOverlay(for: capture)
+                    case .success(nil):
+                        break
+                    case let .failure(error):
+                        self.handleCaptureError(error)
+                    }
+                }
+            } catch {
+                isCapturing = false
                 handleCaptureError(error)
             }
         }
