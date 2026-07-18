@@ -24,6 +24,16 @@ This constrained model is deliberate. General feature/homography panorama stitch
 - Browser-native full-page capture is a useful optional fast path, not the product foundation. Chromium's DevTools Protocol exposes `Page.captureScreenshot` with `captureBeyondViewport`, but it only applies to Chromium pages under a debugging connection. [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/1-3/Page/)
 - Synthetic scrolling via posted Quartz scroll events is technically possible, but different apps interpret wheel units and momentum differently. Apple explicitly notes that large wheel values can have unexpected results. Manual scrolling should ship first; assisted scrolling can be an opt-in adapter after permission and compatibility work. [`CGEvent` scrolling](https://developer.apple.com/documentation/coregraphics/cgeventcreatescrollwheelevent)
 
+## CleanShot X public behavior comparison
+
+CleanShot X is proprietary, so its internal capture and stitching implementation cannot be verified from public material. The architecture here does not claim or attempt to reproduce private internals. We did, however, check its documented product surface and publicly observable workflow before choosing the next slice:
+
+- CleanShot's URL API models scrolling capture as an explicit mode with a user-supplied rectangle and display, followed separately by `start` and optional `autoscroll`. That supports keeping selection, stream lifecycle, and assisted scrolling as separate components. [CleanShot URL API](https://cleanshot.com/docs-api)
+- Its public changelog shows Auto-Scroll arrived after scrolling capture and has received separate fixes, while the core feature has repeatedly received stitching-algorithm, misalignment, cursor, and preview improvements. This reinforces shipping a robust manual capture path first and treating automation as an adapter. [CleanShot changelog](https://cleanshot.com/changelog)
+- Public walkthroughs show the interaction as select an outline, start capture, scroll manually or choose Auto-Scroll, watch a live result preview, then explicitly finish. They also document real failure pressure from sticky menus, scrollbars, fast movement, animation, and non-vertical motion. [Scrolling capture walkthrough](https://scottwillsey.com/cleanshotx-scrolling-screenshots/) and [public review](https://sspai.com/post/60301)
+
+The product target is therefore behavioral parity where it is valuable—explicit region, live progress, manual/automatic modes, safe finish and partial recovery—implemented on top of independently reasoned, testable platform primitives.
+
 ## Runtime pipeline
 
 ```text
@@ -64,21 +74,27 @@ One final Core Graphics render → CaptureStore → Quick Access
 
 `ScrollingCaptureSession` is the transactional state machine. It never advances its reference on rejected frames, requires stable frame dimensions, applies hard output limits, and exposes progress suitable for a floating HUD.
 
+`ScrollingCaptureRegionResolver` converts an AppKit global selection into a pixel-aligned, display-local ScreenCaptureKit rectangle. It rejects cross-display selections and records exact native output dimensions, including Retina scaling and offset display layouts.
+
+`ScrollingCaptureFrameSource` owns the live `SCStream`. It excludes this app's windows, accepts only complete frames of the expected size, preserves ScreenCaptureKit metadata, and converts gated pixel buffers to `CGImage` off the callback queue. Its lifecycle is guarded against overlapping starts and suppresses failure reporting during an intentional stop.
+
+`LatestValueProcessor` provides bounded backpressure. While analysis is busy, it keeps only the newest pending frame, so capture latency and memory cannot grow with the stream duration.
+
 The compositor keeps the initial viewport body plus only the newly revealed strip from each accepted frame. This avoids retaining duplicate frames and avoids repeatedly reallocating an ever-growing bitmap. A configured fixed header is retained from the first frame; a fixed footer is replaced and emitted from the final accepted frame.
 
-Regression tests cover exact displacement, duplicate rejection, ambiguous content, overlap removal, fixed bands, resizing, and output limits using deterministic synthetic documents.
+Regression tests cover exact displacement, duplicate rejection, ambiguous content, overlap removal, fixed bands, resizing, output limits, multi-display geometry, Retina pixel alignment, frame completeness, and latest-frame backpressure using deterministic inputs.
 
 ## Next implementation slices
 
-### 1. Frame-source adapter
+### Completed: frame-source adapter
 
-- Convert the selected AppKit global rectangle to a single display-local top-left `sourceRect`.
-- Configure `SCStream` for native pixel size, BGRA, cursor hidden, 15 fps, and queue depth 3.
-- Read `SCFrameStatus.complete`, scale/content metadata, and dirty rectangles.
-- Use a single serial analysis queue with a one-frame latest-wins mailbox. Never let frame delivery queue behind CPU work.
-- Convert only gated `CVPixelBuffer` frames to `CGImage`; keep all earlier checks buffer-native.
+- Converts the selected AppKit global rectangle to a single display-local top-left `sourceRect`.
+- Configures `SCStream` for native pixel size, BGRA, cursor hidden, 15 fps, and queue depth 3.
+- Reads `SCFrameStatus.complete`, scale/content metadata, and dirty rectangles.
+- Uses a serial processing queue with a one-frame latest-wins mailbox.
+- Converts only complete, correctly sized `CVPixelBuffer` frames to `CGImage`.
 
-### 2. Capture HUD and lifecycle
+### 1. Capture coordinator, HUD, and lifecycle
 
 - Reuse region selection, but require the scrolling region to stay on one display.
 - Show an excluded-app floating HUD outside the selected region with status: Ready, Scroll, Capturing, Paused, Limit reached, Finish, Cancel.
@@ -86,14 +102,14 @@ Regression tests cover exact displacement, duplicate rejection, ambiguous conten
 - Keep the first accepted frame immediately. During fast/blurred movement, reject silently; show a “scroll a little slower” hint only after a streak of low-confidence frames.
 - On window resize, display-scale change, selected content disappearing, or stream failure, stop safely and offer the valid partial capture.
 
-### 3. Fixed and dynamic content handling
+### 2. Fixed and dynamic content handling
 
 - Add calibration over the first two reliable scroll steps. Compare same-coordinate rows with displacement-aligned rows to identify contiguous fixed top/bottom bands.
 - Mask scrollbars, video, caret blinking, sticky chat buttons, and other independently changing islands during registration.
 - If fixed content occupies too much of the viewport or the page is textureless/repetitive, ask the user to narrow the region rather than manufacture a bad seam.
 - Add a seam audit pass around every join. Flag high residual differences and keep the last valid partial result.
 
-### 4. Large-output storage
+### 3. Large-output storage
 
 The current compositor is intentionally sufficient for the first end-to-end feature but a final `CGImage` still requires contiguous decoded memory. Before removing the 80-million-pixel guardrail, introduce a tile-backed temporary store:
 
@@ -102,7 +118,7 @@ The current compositor is intentionally sufficient for the first end-to-end feat
 - assemble/encode on finish with explicit cancellation and disk-space checks;
 - retain the existing maximum dimension and maximum pixel-count policy because decoders and editors also need safe limits.
 
-### 5. Optional adapters
+### 4. Optional adapters
 
 - Chromium adapter: when the user explicitly chooses a debuggable Chromium tab, use CDP full-page capture and bypass visual stitching.
 - Assisted scroll adapter: opt-in synthetic scrolling with per-app compatibility profiles, focus verification, and immediate cancellation on user input.
