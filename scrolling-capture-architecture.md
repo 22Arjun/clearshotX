@@ -80,9 +80,9 @@ One final Core Graphics render → CaptureStore → Quick Access
 
 `LatestValueProcessor` provides bounded backpressure. While analysis is busy, it keeps only the newest pending frame, so capture latency and memory cannot grow with the stream duration.
 
-`ScrollingCaptureCoordinator` now connects selection, streaming, stitching, bounded preview rendering, final rendering, storage, and Quick Access as one guarded lifecycle. It serializes pause/resume/finish/cancel/error completion, assembles the final bitmap off the main actor, preserves a valid partial capture after a stream or analysis failure when at least one frame exists, and ignores stale callbacks using a per-capture identity. Resume must prove continuity with the last accepted viewport; it never blindly rebases across document rows that may have been skipped while paused.
+`ScrollingCaptureCoordinator` now defaults to automatic capture and retains the continuous manual source as an injectable fallback. It connects selection, scrolling, discrete capture, stitching, bounded preview rendering, final rendering, storage, and Quick Access as one guarded lifecycle. It serializes pause/resume/finish/cancel/error completion and ignores stale callbacks using a per-capture identity.
 
-`ScrollingCaptureRegionSelectionManager` is intentionally separate from ordinary Region Capture. Mouse-up preserves the selection instead of committing it; eight resize targets, whole-frame movement, keyboard nudging, native-pixel dimensions, and explicit Start/Cancel controls remain available until confirmation. The target app is restored to the foreground before streaming begins, and the locked selection overlay overlaps handoff to the live capture UI so the frame never flashes away.
+`ScrollingCaptureRegionSelectionManager` is intentionally separate from ordinary Region Capture. Mouse-up preserves the selection instead of committing it; eight resize targets, whole-frame movement, keyboard nudging, native-pixel dimensions, and explicit Start/Cancel controls remain available until confirmation. The target app is restored to the foreground, then the locked selection overlay is removed before the first automatic event so it cannot intercept scrolling.
 
 `ScrollingCaptureHUDManager` presents an app-excluded, non-activating experience around the selected region: the crop frame remains visible, the desktop outside it stays dimmed, a transparent page-only miniature grows independently, and compact Cancel/Pause/Done controls remain anchored to the selection. The miniature has no card, border, status labels, dimensions, frame count, or placeholder; its panel tracks the bitmap aspect ratio, stays top-anchored, and animates as the accepted document grows. None of these surfaces enter the ScreenCaptureKit stream or take scrolling focus from the target app.
 
@@ -93,6 +93,16 @@ One final Core Graphics render → CaptureStore → Quick Access
 The compositor keeps the initial viewport body plus only newly revealed native strips. New rows remain in a bounded deferred tail until another aligned or settled frame confirms them; later overlap supplies cleaner pixels before the strip becomes immutable. Automatic boundary analysis detects sticky headers and footers, including bars with bounded blank padding, retains the header once, and replaces the footer from the final settled frame. If a sticky inset becomes provable while only the initial viewport and a speculative tail exist, both are recropped consistently before any moving rows become immutable. An uncertain one-frame tail is omitted rather than saving a corrupt seam.
 
 Regression tests cover exact displacement, repeated frames while stopped, resumed scrolling, alternating 17–117-pixel offsets, padded sticky navigation, headings and thin text crossing seams, local late-loading changes, ambiguous periodic rows, reverse jitter, no-overlap gaps, image-heavy seams, and 1500-pixel-tall Retina alignment using deterministic pixel-for-pixel comparisons.
+
+### Completed: deterministic auto-scroll pipeline
+
+- `ScrollingCaptureCGEventScrollDriver` posts continuous pixel-wheel `CGEvent`s at the selected region center. Event-posting access is checked before selection and again at delivery.
+- `ScrollingCaptureDiscreteFrameSource` prepares one reusable ScreenCaptureKit filter and obtains exact native-size frames with `SCScreenshotManager`; it never enables `scalesToFit`.
+- `ScrollingCaptureAutoCaptureController` owns the scroll → settle → capture → register → append loop on a user-initiated task. It probes for a settled same-position observation, pauses without rebasing, and stops after two consecutive near-zero offsets.
+- A low-confidence step is reversed, allowed to settle, and retried with half the pixel-wheel delta up to the configured retry limit. If confidence still cannot be established, capture fails closed before committing a corrupt seam.
+- `ScrollingCaptureStitchEngine` runs Accelerate/vDSP normalized cross-correlation in a bounded coarse plane, then refines within a horizontally reduced plane that retains every native vertical row. It reports correlation, peak uniqueness, exact native offset, stationary state, and automatically detected fixed top/bottom bands.
+- `ScrollingCaptureCompositor` receives only untouched native `CGImage` frames. It emits the initial header once, moving strips once, and the latest sticky footer once; analysis images never enter the output.
+- Focused static tests cover exact Retina-row recovery, unrelated and periodic low-confidence pairs, stationary frames, explicit/automatic sticky insets, native image dimensions, automatic page-end detection, and rollback/half-step recovery.
 
 ## Next implementation slices
 

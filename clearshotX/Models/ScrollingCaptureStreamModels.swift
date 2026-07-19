@@ -43,6 +43,20 @@ nonisolated protocol ScrollingCaptureFrameSourcing: AnyObject, Sendable {
     func setFrameDeliveryEnabled(_ isEnabled: Bool)
 }
 
+/// Discrete native-resolution screenshots used by app-driven scrolling. Unlike the
+/// continuous source above, a frame is requested only after a synthetic scroll step
+/// has settled, so registration never races an intermediate browser paint.
+nonisolated protocol ScrollingCaptureDiscreteFrameSourcing: AnyObject, Sendable {
+    func prepare(selectedRegion: CGRect) async throws -> ScrollingCaptureRegionGeometry
+    func captureFrame() async throws -> CGImage
+    func stop() async
+}
+
+nonisolated protocol ScrollingCaptureScrollDriving: AnyObject, Sendable {
+    /// Positive values advance the document; negative values undo a previous step.
+    func scroll(verticalDelta: Int, at appKitPoint: CGPoint) throws
+}
+
 nonisolated enum ScrollingCaptureFrameSourceError: LocalizedError, Equatable {
     case alreadyRunning
     case noDisplayAvailable

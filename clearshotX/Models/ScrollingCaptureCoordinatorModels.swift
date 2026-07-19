@@ -33,7 +33,7 @@ struct ScrollingCaptureHUDState: Equatable {
         case .starting:
             "Preparing scrolling capture…"
         case .capturing:
-            acceptedFrameCount <= 1 ? "Start scrolling" : "Capturing as you scroll"
+            acceptedFrameCount <= 1 ? "Auto-scrolling page" : "Capturing page"
         case .guidance:
             "Scroll a little slower"
         case .paused:
@@ -48,11 +48,11 @@ struct ScrollingCaptureHUDState: Equatable {
         case .starting:
             "Connecting to the selected area"
         case .capturing:
-            "Keep the area still horizontally, then finish when the page is complete."
+            "ClearshotX is scrolling and capturing each settled page step."
         case .guidance:
-            "Small, steady vertical steps produce the cleanest result."
+            "Retrying this area with a smaller automatic scroll step."
         case .paused:
-            "Adjust the page, then resume from the same scroll position."
+            "Resume to continue automatic scrolling from this position."
         case .finishing:
             "Assembling and saving the accepted pixels"
         }

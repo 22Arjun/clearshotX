@@ -197,6 +197,8 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         let store = FakeCaptureStore()
         let coordinator = ScrollingCaptureCoordinator(
             frameSource: source,
+            autoCapture: nil,
+            usesAutomaticCapture: false,
             captureStore: store,
             hudPresenter: hud
         )
@@ -231,6 +233,8 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         let store = FakeCaptureStore()
         let coordinator = ScrollingCaptureCoordinator(
             frameSource: source,
+            autoCapture: nil,
+            usesAutomaticCapture: false,
             captureStore: store,
             hudPresenter: hud
         )

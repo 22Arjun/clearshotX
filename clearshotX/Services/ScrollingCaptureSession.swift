@@ -823,7 +823,9 @@ private nonisolated struct ContinuityPlane {
     }
 }
 
-private nonisolated final class ScrollingCaptureCompositor {
+/// Native-pixel strip compositor shared by manual and automatic capture. It never
+/// scales a source frame and keeps fixed top/bottom chrome exactly once.
+nonisolated final class ScrollingCaptureCompositor {
     private struct Segment {
         let image: CGImage
     }

@@ -243,6 +243,13 @@ final class AppShellViewModel: ObservableObject {
             }
         }
 
+        guard CGPreflightPostEventAccess() || CGRequestPostEventAccess() else {
+            handleCaptureError(
+                ScrollingCaptureAutoCaptureError.postEventPermissionDenied
+            )
+            return
+        }
+
         isCapturing = true
         Task {
             do {
@@ -252,6 +259,9 @@ final class AppShellViewModel: ObservableObject {
                     return
                 }
 
+                // Auto-scroll events must reach the selected application, never
+                // the now-locked selection window above it.
+                scrollingCaptureRegionSelector.dismissSelectionOverlay()
                 try await scrollingCaptureCoordinator.start(
                     selectedRegion: selectedRegion
                 ) { [weak self] result in
@@ -267,7 +277,6 @@ final class AppShellViewModel: ObservableObject {
                         self.handleCaptureError(error)
                     }
                 }
-                scrollingCaptureRegionSelector.dismissSelectionOverlay()
             } catch {
                 scrollingCaptureRegionSelector.dismissSelectionOverlay()
                 isCapturing = false

@@ -23,6 +23,7 @@ final class ScrollingCaptureCoordinator {
     private(set) var phase: Phase = .idle
 
     private let frameSource: ScrollingCaptureFrameSourcing
+    private let autoCapture: ScrollingCaptureAutoCapturing?
     private let captureStore: CaptureStoring
     private let hudPresenter: ScrollingCaptureHUDPresenting
     private let configuration: ScrollingCaptureConfiguration
@@ -38,11 +39,18 @@ final class ScrollingCaptureCoordinator {
 
     init(
         frameSource: ScrollingCaptureFrameSourcing = ScrollingCaptureFrameSource(),
+        autoCapture: ScrollingCaptureAutoCapturing? = nil,
+        usesAutomaticCapture: Bool = true,
         captureStore: CaptureStoring? = nil,
         hudPresenter: ScrollingCaptureHUDPresenting? = nil,
         configuration: ScrollingCaptureConfiguration = ScrollingCaptureConfiguration()
     ) {
         self.frameSource = frameSource
+        self.autoCapture = usesAutomaticCapture
+            ? autoCapture ?? ScrollingCaptureAutoCaptureController(
+                captureConfiguration: configuration
+            )
+            : nil
         self.captureStore = captureStore ?? CaptureStore()
         self.hudPresenter = hudPresenter ?? ScrollingCaptureHUDManager()
         self.configuration = configuration
@@ -57,7 +65,7 @@ final class ScrollingCaptureCoordinator {
         }
 
         let captureID = UUID()
-        let worker = ScrollingCaptureWorker(
+        let worker = autoCapture == nil ? ScrollingCaptureWorker(
             configuration: configuration,
             previewPublication: { [weak self] image in
                 Task { @MainActor [weak self] in
@@ -65,7 +73,7 @@ final class ScrollingCaptureCoordinator {
                     self?.hudViewModel?.updatePreview(image)
                 }
             }
-        )
+        ) : nil
         let hudViewModel = ScrollingCaptureHUDViewModel(
             finish: { [weak self] in self?.finish() },
             cancel: { [weak self] in self?.cancel() },
@@ -83,6 +91,40 @@ final class ScrollingCaptureCoordinator {
         hudPresenter.show(viewModel: hudViewModel, adjacentTo: selectedRegion)
 
         do {
+            if let autoCapture {
+                let geometry = try await autoCapture.start(
+                    selectedRegion: selectedRegion,
+                    onProgress: { [weak self] decision in
+                        Task { @MainActor [weak self] in
+                            self?.handleAutoProgress(decision, captureID: captureID)
+                        }
+                    },
+                    onPreview: { [weak self] image in
+                        Task { @MainActor [weak self] in
+                            guard self?.activeCaptureID == captureID else { return }
+                            self?.hudViewModel?.updatePreview(image)
+                        }
+                    },
+                    onCompletion: { [weak self] result in
+                        Task { @MainActor [weak self] in
+                            self?.handleAutoCompletion(result, captureID: captureID)
+                        }
+                    }
+                )
+                guard activeCaptureID == captureID else {
+                    autoCapture.cancel()
+                    return
+                }
+                self.geometry = geometry
+                phase = .capturing
+                hudState.phase = .capturing
+                hudViewModel.update(hudState)
+                return
+            }
+
+            guard let worker else {
+                throw ScrollingCaptureAutoCaptureError.notPrepared
+            }
             let geometry = try await frameSource.start(
                 selectedRegion: selectedRegion,
                 onFrame: { [weak self, weak worker] frame in
@@ -122,19 +164,33 @@ final class ScrollingCaptureCoordinator {
         else {
             return
         }
-        finalize(captureID: captureID, stopSource: true, fallbackError: nil)
+        if let autoCapture {
+            phase = .finishing
+            hudState.phase = .finishing
+            hudViewModel?.update(hudState)
+            autoCapture.finish()
+        } else {
+            finalize(captureID: captureID, stopSource: true, fallbackError: nil)
+        }
     }
 
     func cancel() {
         guard phase != .idle,
               phase != .cancelling,
-              let captureID = activeCaptureID,
-              let worker
+              let captureID = activeCaptureID
         else {
             return
         }
 
         phase = .cancelling
+        if let autoCapture {
+            autoCapture.cancel()
+            return
+        }
+        guard let worker else {
+            complete(.success(nil), captureID: captureID)
+            return
+        }
         frameSource.setFrameDeliveryEnabled(false)
         worker.cancel()
         Task { @MainActor [weak self] in
@@ -145,6 +201,24 @@ final class ScrollingCaptureCoordinator {
     }
 
     func togglePause() {
+        if let autoCapture {
+            switch phase {
+            case .capturing:
+                autoCapture.setPaused(true)
+                phase = .paused
+                hudState.phase = .paused
+                hudViewModel?.update(hudState)
+            case .paused:
+                autoCapture.setPaused(false)
+                phase = .capturing
+                hudState.phase = .capturing
+                hudViewModel?.update(hudState)
+            default:
+                break
+            }
+            return
+        }
+
         guard let worker else { return }
 
         switch phase {
@@ -204,6 +278,49 @@ final class ScrollingCaptureCoordinator {
             return
         }
         finalize(captureID: captureID, stopSource: false, fallbackError: error)
+    }
+
+    private func handleAutoProgress(
+        _ decision: ScrollingCaptureFrameDecision,
+        captureID: UUID
+    ) {
+        guard activeCaptureID == captureID,
+              phase == .starting || phase == .capturing || phase == .paused else {
+            return
+        }
+        hudState = ScrollingCaptureHUDReducer.applying(
+            decision,
+            to: hudState,
+            consecutiveRejections: &consecutiveRejections
+        )
+        if phase == .paused {
+            hudState.phase = .paused
+        }
+        hudViewModel?.update(hudState)
+    }
+
+    private func handleAutoCompletion(
+        _ result: Result<CGImage?, Error>,
+        captureID: UUID
+    ) {
+        guard activeCaptureID == captureID else { return }
+        switch result {
+        case let .success(image?):
+            do {
+                let capture = try makeCaptureResult(
+                    image: image,
+                    selectedRegion: selectedRegion,
+                    geometry: geometry
+                )
+                complete(.success(capture), captureID: captureID)
+            } catch {
+                complete(.failure(error), captureID: captureID)
+            }
+        case .success(nil):
+            complete(.success(nil), captureID: captureID)
+        case let .failure(error):
+            complete(.failure(error), captureID: captureID)
+        }
     }
 
     private func finalize(
