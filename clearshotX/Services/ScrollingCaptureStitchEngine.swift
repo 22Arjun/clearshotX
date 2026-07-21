@@ -16,11 +16,13 @@ nonisolated struct ScrollingCaptureStitchConfiguration: Equatable, Sendable {
     var preferredCorrelationBandHeight = 180
     var nativeRefinementBandHeight = 320
     var nativeRefinementRadius = 8
+    var maximumCorrelationBands = 5
 
     var minimumOverlapFraction = 0.28
     var maximumScrollFraction = 0.72
     var correlationThreshold: Float = 0.85
     var minimumPeakMargin: Float = 0.012
+    var minimumBandTexture: Float = 0.000_35
     var zeroOffsetTolerance = 2
     var stationaryDifferenceThreshold: Float = 0.012
 
@@ -210,6 +212,8 @@ nonisolated final class ScrollingCaptureStitchEngine {
               configuration.preferredCorrelationBandHeight > 0,
               configuration.nativeRefinementBandHeight > 0,
               configuration.nativeRefinementRadius >= 0,
+              configuration.maximumCorrelationBands > 0,
+              configuration.minimumBandTexture >= 0,
               configuration.minimumOverlapFraction > 0,
               configuration.minimumOverlapFraction < 1,
               configuration.maximumScrollFraction > 0,
@@ -303,16 +307,13 @@ nonisolated final class ScrollingCaptureStitchEngine {
             let overlapHeight = contentHeight - offset
             guard overlapHeight > 1 else { continue }
             let bandHeight = min(preferredBandHeight, overlapHeight)
-            let bandTop = contentTop + max(0, (overlapHeight - bandHeight) / 2)
-            let currentStart = bandTop * previous.width
-            let previousStart = (bandTop + offset) * previous.width
-            let sampleCount = bandHeight * previous.width
-            let correlation = normalizedCrossCorrelation(
-                previous: previous.pixels,
-                previousStart: previousStart,
-                current: current.pixels,
-                currentStart: currentStart,
-                count: sampleCount
+            let correlation = multiBandCorrelation(
+                previous: previous,
+                current: current,
+                contentTop: contentTop,
+                offset: offset,
+                overlapHeight: overlapHeight,
+                bandHeight: bandHeight
             )
             candidates.append(Candidate(offset: offset, correlation: correlation))
         }
@@ -345,19 +346,75 @@ nonisolated final class ScrollingCaptureStitchEngine {
         return max(0, result.best.correlation - second)
     }
 
+    private struct CorrelationSample {
+        let correlation: Float
+        let texture: Float
+    }
+
+    private func multiBandCorrelation(
+        previous: NCCPlane,
+        current: NCCPlane,
+        contentTop: Int,
+        offset: Int,
+        overlapHeight: Int,
+        bandHeight: Int
+    ) -> Float {
+        let starts = bandStarts(overlapHeight: overlapHeight, bandHeight: bandHeight)
+        var weightedCorrelation: Float = 0
+        var totalWeight: Float = 0
+        var fallbackCorrelation: Float = -1
+
+        for localTop in starts {
+            let bandTop = contentTop + localTop
+            let currentStart = bandTop * previous.width
+            let previousStart = (bandTop + offset) * previous.width
+            let sampleCount = bandHeight * previous.width
+            let sample = normalizedCrossCorrelation(
+                previous: previous.pixels,
+                previousStart: previousStart,
+                current: current.pixels,
+                currentStart: currentStart,
+                count: sampleCount
+            )
+            fallbackCorrelation = max(fallbackCorrelation, sample.correlation)
+            guard sample.texture >= configuration.minimumBandTexture else { continue }
+            let weight = max(sample.texture, configuration.minimumBandTexture)
+            weightedCorrelation += sample.correlation * weight
+            totalWeight += weight
+        }
+
+        if totalWeight > 0 {
+            return weightedCorrelation / totalWeight
+        }
+        return fallbackCorrelation
+    }
+
+    private func bandStarts(overlapHeight: Int, bandHeight: Int) -> [Int] {
+        guard overlapHeight > bandHeight else { return [0] }
+        let available = overlapHeight - bandHeight
+        let count = min(
+            configuration.maximumCorrelationBands,
+            max(1, available / max(1, bandHeight / 2) + 1)
+        )
+        guard count > 1 else { return [available / 2] }
+        return (0..<count).map { index in
+            Int((Double(available) * Double(index) / Double(count - 1)).rounded())
+        }
+    }
+
     private func normalizedCrossCorrelation(
         previous: [Float],
         previousStart: Int,
         current: [Float],
         currentStart: Int,
         count: Int
-    ) -> Float {
+    ) -> CorrelationSample {
         guard count > 1,
               previousStart >= 0,
               currentStart >= 0,
               previousStart + count <= previous.count,
               currentStart + count <= current.count else {
-            return -1
+            return CorrelationSample(correlation: -1, texture: 0)
         }
 
         var sumPrevious: Float = 0
@@ -391,11 +448,18 @@ nonisolated final class ScrollingCaptureStitchEngine {
             squareCurrent - (sumCurrent * sumCurrent / sampleCount)
         )
         let denominator = sqrt(variancePrevious * varianceCurrent)
+        let texture = denominator / (sampleCount * 255.0 * 255.0)
         guard denominator > 0.000_1 else {
             let meanDelta = abs(sumPrevious - sumCurrent) / sampleCount
-            return meanDelta <= 0.5 ? 1 : 0
+            return CorrelationSample(
+                correlation: meanDelta <= 0.5 ? 1 : 0,
+                texture: 0
+            )
         }
-        return min(1, max(-1, covariance / denominator))
+        return CorrelationSample(
+            correlation: min(1, max(-1, covariance / denominator)),
+            texture: texture
+        )
     }
 
     private func scaledInsets(

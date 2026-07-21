@@ -23,6 +23,23 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
         XCTAssertEqual(match.disposition, .accept)
     }
 
+    func testSparsePageUsesTexturedBandsAroundBlankCenter() throws {
+        let document = sparseStitchDocument(width: 220, height: 860)
+        let previous = try stitchCrop(document, y: 0, height: 320)
+        let current = try stitchCrop(document, y: 74, height: 320)
+        var configuration = stitchConfiguration()
+        configuration.preferredCorrelationBandHeight = 54
+        configuration.nativeRefinementBandHeight = 54
+        configuration.maximumCorrelationBands = 5
+        let engine = ScrollingCaptureStitchEngine(configuration: configuration)
+
+        let match = try engine.match(previous: previous, current: current)
+
+        XCTAssertEqual(match.verticalOffset, 74)
+        XCTAssertGreaterThan(match.correlation, 0.85)
+        XCTAssertEqual(match.disposition, .accept)
+    }
+
     func testIdenticalFramesProduceReliableStationaryCandidate() throws {
         let frame = try stitchCrop(
             stitchDocument(width: 180, height: 420),
@@ -319,6 +336,17 @@ private func stitchDocument(width: Int, height: Int) -> CGImage {
                 &+ (x / 5) &* 31
                 &+ ((x * y) / 19) &* 13) % 256
         )
+    }
+}
+
+private func sparseStitchDocument(width: Int, height: Int) -> CGImage {
+    stitchImage(width: width, height: height) { x, y in
+        let inTextBand = (y % 190) < 44 || (y % 190) > 154
+        guard inTextBand else { return 248 }
+        if x % 17 < 11 || (x + y / 3) % 29 < 13 {
+            return UInt8((53 &+ x &* 19 &+ y &* 7 &+ (x / 5) &* 31) % 196)
+        }
+        return 246
     }
 }
 

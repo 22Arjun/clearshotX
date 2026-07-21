@@ -9,12 +9,12 @@ import Foundation
 nonisolated struct ScrollingCaptureAutoCaptureConfiguration: Equatable, Sendable {
     /// Scroll in AppKit points; the captured offset is measured independently in
     /// native pixels, so Retina output never depends on this estimate.
-    var viewportStepFraction = 0.62
-    var minimumStepPoints = 24
-    var maximumRetries = 3
-    var initialSettleDelay: Duration = .milliseconds(32)
+    var viewportStepFraction = 0.58
+    var minimumStepPoints = 12
+    var maximumRetries = 5
+    var initialSettleDelay: Duration = .milliseconds(40)
     var settleProbeDelay: Duration = .milliseconds(18)
-    var maximumSettleProbes = 3
+    var maximumSettleProbes = 5
     var stationaryStepsToFinish = 2
     var maximumSteps = 1_000
 }
