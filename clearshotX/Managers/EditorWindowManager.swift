@@ -15,6 +15,7 @@ final class EditorWindowManager {
     private let defaultToolbarWidth: CGFloat = 1_220
     private let cropToolbarWidth: CGFloat = 1_320
     private let textToolbarWidth: CGFloat = 1_370
+    private let backgroundInspectorWidth: CGFloat = 1_400
     private let maximumPreferredSize = NSSize(width: 1_400, height: 900)
     private let toolbarHeight: CGFloat = 62
     private let canvasHorizontalPadding: CGFloat = 96
@@ -77,12 +78,13 @@ final class EditorWindowManager {
         window.contentView = NSHostingView(rootView: editorView)
         center(window, on: targetScreen)
 
-        let layoutObserver = Publishers.CombineLatest(
+        let layoutObserver = Publishers.CombineLatest3(
             viewModel.$activeTool,
-            viewModel.$selectedAnnotationID
+            viewModel.$selectedAnnotationID,
+            viewModel.$isBackgroundInspectorPresented
         )
         .dropFirst()
-        .sink { [weak self, weak window, weak viewModel] _, _ in
+        .sink { [weak self, weak window, weak viewModel] _, _, _ in
             guard let self,
                   let window,
                   let viewModel
@@ -153,6 +155,10 @@ final class EditorWindowManager {
     }
 
     private func recommendedToolbarWidth(for viewModel: EditorViewModel) -> CGFloat {
+        if viewModel.isBackgroundInspectorPresented {
+            return backgroundInspectorWidth
+        }
+
         if viewModel.isCropModeActive {
             return cropToolbarWidth
         }

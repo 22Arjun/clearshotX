@@ -16,18 +16,28 @@ struct EditorView: View {
         VStack(spacing: 0) {
             EditorToolbarView(viewModel: viewModel)
             Divider()
-            EditorCanvasView(
-                viewModel: viewModel,
-                image: viewModel.image,
-                annotationObjects: viewModel.annotationObjects,
-                draftAnnotationObject: viewModel.draftAnnotationObject,
-                draftCropRect: viewModel.draftCropRect,
-                isCropGridVisible: viewModel.isCropGridVisible,
-                selectedAnnotationID: viewModel.selectedAnnotationID,
-                activeTool: viewModel.activeTool,
-                textFormattingCommand: viewModel.textFormattingCommand
-            )
+            HStack(spacing: 0) {
+                EditorCanvasView(
+                    viewModel: viewModel,
+                    image: viewModel.image,
+                    annotationObjects: viewModel.annotationObjects,
+                    draftAnnotationObject: viewModel.draftAnnotationObject,
+                    draftCropRect: viewModel.draftCropRect,
+                    isCropGridVisible: viewModel.isCropGridVisible,
+                    selectedAnnotationID: viewModel.selectedAnnotationID,
+                    activeTool: viewModel.activeTool,
+                    textFormattingCommand: viewModel.textFormattingCommand,
+                    backgroundComposition: viewModel.backgroundComposition
+                )
+
+                if viewModel.isBackgroundInspectorPresented {
+                    Divider()
+                    EditorBackgroundInspectorView(viewModel: viewModel)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
         }
+        .animation(.easeOut(duration: 0.16), value: viewModel.isBackgroundInspectorPresented)
         .frame(minWidth: 760, minHeight: 460)
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -1469,6 +1479,7 @@ private struct EditorCanvasView: NSViewRepresentable {
     let selectedAnnotationID: UUID?
     let activeTool: EditorTool?
     let textFormattingCommand: EditorTextFormattingCommand?
+    let backgroundComposition: EditorBackgroundComposition
 
     func makeNSView(context: Context) -> EditorCanvasNSView {
         let view = EditorCanvasNSView()
@@ -1481,7 +1492,8 @@ private struct EditorCanvasView: NSViewRepresentable {
             isCropGridVisible: isCropGridVisible,
             selectedAnnotationID: selectedAnnotationID,
             activeTool: activeTool,
-            textFormattingCommand: textFormattingCommand
+            textFormattingCommand: textFormattingCommand,
+            backgroundComposition: backgroundComposition
         )
         return view
     }
@@ -1496,12 +1508,15 @@ private struct EditorCanvasView: NSViewRepresentable {
             isCropGridVisible: isCropGridVisible,
             selectedAnnotationID: selectedAnnotationID,
             activeTool: activeTool,
-            textFormattingCommand: textFormattingCommand
+            textFormattingCommand: textFormattingCommand,
+            backgroundComposition: backgroundComposition
         )
     }
 }
 
 private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
+    private let compositionCanvasLayer = CALayer()
+    private let backgroundLayer = CAGradientLayer()
     private let imageContainerLayer = CALayer()
     private let imageLayer = CALayer()
     private let annotationContainerLayer = CALayer()
@@ -1510,6 +1525,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private let cropCancelButton = CropActionButton(title: "Cancel", target: nil, action: nil)
     private let cropApplyButton = CropActionButton(title: "Crop", target: nil, action: nil)
     private let annotationLayerRenderer = AnnotationLayerRenderer()
+    private let compositionLayoutEngine = EditorCompositionLayoutEngine()
     private static let northWestSouthEastResizeCursor = makeDiagonalResizeCursor(kind: .northWestSouthEast)
     private static let northEastSouthWestResizeCursor = makeDiagonalResizeCursor(kind: .northEastSouthWest)
 
@@ -1522,6 +1538,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
     private var isCropGridVisible = false
     private var selectedAnnotationID: UUID?
     private var activeTool: EditorTool?
+    private var backgroundComposition = EditorBackgroundComposition.default
     private var imageFrameInView: CGRect = .zero
     private var imageDisplayScale: CGFloat = 1
     private var trackingArea: NSTrackingArea?
@@ -1776,7 +1793,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         isCropGridVisible: Bool,
         selectedAnnotationID: UUID?,
         activeTool: EditorTool?,
-        textFormattingCommand: EditorTextFormattingCommand?
+        textFormattingCommand: EditorTextFormattingCommand?,
+        backgroundComposition: EditorBackgroundComposition
     ) {
         self.viewModel = viewModel
         if currentImage !== image {
@@ -1790,6 +1808,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         self.isCropGridVisible = isCropGridVisible
         self.selectedAnnotationID = selectedAnnotationID
         self.activeTool = activeTool
+        self.backgroundComposition = backgroundComposition
         applyTextFormattingCommandIfNeeded(textFormattingCommand)
         removeTextEditorIfAnnotationDisappeared()
         renderAnnotationLayers()
@@ -2088,10 +2107,11 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         layer?.backgroundColor = NSColor.underPageBackgroundColor.cgColor
         layer?.masksToBounds = true
 
-        imageContainerLayer.shadowColor = NSColor.black.cgColor
-        imageContainerLayer.shadowOpacity = 0.22
-        imageContainerLayer.shadowRadius = 20
-        imageContainerLayer.shadowOffset = CGSize(width: 0, height: 10)
+        compositionCanvasLayer.name = "CompositionCanvasLayer"
+        compositionCanvasLayer.contentsScale = 1
+
+        backgroundLayer.name = "CompositionBackgroundLayer"
+        backgroundLayer.contentsScale = 1
 
         imageLayer.backgroundColor = NSColor.black.withAlphaComponent(0.08).cgColor
         imageLayer.contentsGravity = .resize
@@ -2114,7 +2134,9 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
         cropOverlayLayer.allowsEdgeAntialiasing = true
         cropOverlayLayer.isHidden = true
 
-        layer?.addSublayer(imageContainerLayer)
+        layer?.addSublayer(compositionCanvasLayer)
+        compositionCanvasLayer.addSublayer(backgroundLayer)
+        compositionCanvasLayer.addSublayer(imageContainerLayer)
         imageContainerLayer.addSublayer(imageLayer)
         imageContainerLayer.addSublayer(annotationContainerLayer)
         imageContainerLayer.addSublayer(cropOverlayLayer)
@@ -2161,6 +2183,7 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
 
     private func layoutCanvasLayers() {
         guard let currentImage else {
+            compositionCanvasLayer.frame = .zero
             imageContainerLayer.frame = .zero
             imageFrameInView = .zero
             imageDisplayScale = 1
@@ -2169,43 +2192,120 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
             return
         }
 
-        let horizontalInset: CGFloat = activeTool == .crop ? 52 : 28
-        let verticalInset: CGFloat = activeTool == .crop ? 58 : 28
+        let horizontalInset: CGFloat = activeTool == .crop ? 52 : 34
+        let verticalInset: CGFloat = activeTool == .crop ? 58 : 34
         let availableBounds = bounds.insetBy(dx: horizontalInset, dy: verticalInset)
         let imageSize = currentImage.editorCanvasSize
-        imageDisplayScale = imageSize.aspectFitScale(in: availableBounds.size)
-        let fittedSize = NSSize(
-            width: imageSize.width * imageDisplayScale,
-            height: imageSize.height * imageDisplayScale
+        let effectiveComposition = activeTool == .crop
+            ? EditorBackgroundComposition.default
+            : backgroundComposition
+        let renderPlan = compositionLayoutEngine.makePlan(
+            contentSize: imageSize,
+            composition: effectiveComposition
+        )
+        imageDisplayScale = renderPlan.canvasSize.aspectFitScale(in: availableBounds.size)
+        let fittedCanvasSize = NSSize(
+            width: renderPlan.canvasSize.width * imageDisplayScale,
+            height: renderPlan.canvasSize.height * imageDisplayScale
+        )
+        let compositionFrame = CGRect(
+            x: availableBounds.midX - fittedCanvasSize.width / 2,
+            y: availableBounds.midY - fittedCanvasSize.height / 2,
+            width: fittedCanvasSize.width,
+            height: fittedCanvasSize.height
         )
         let imageFrame = CGRect(
-            x: availableBounds.midX - fittedSize.width / 2,
-            y: availableBounds.midY - fittedSize.height / 2,
-            width: fittedSize.width,
-            height: fittedSize.height
+            x: compositionFrame.minX + renderPlan.contentFrame.minX * imageDisplayScale,
+            y: compositionFrame.minY + renderPlan.contentFrame.minY * imageDisplayScale,
+            width: imageSize.width * imageDisplayScale,
+            height: imageSize.height * imageDisplayScale
         )
         imageFrameInView = imageFrame
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        imageContainerLayer.bounds = CGRect(origin: .zero, size: imageSize)
-        imageContainerLayer.position = CGPoint(x: imageFrame.midX, y: imageFrame.midY)
-        imageContainerLayer.setAffineTransform(
+        compositionCanvasLayer.bounds = renderPlan.canvasBounds
+        compositionCanvasLayer.position = CGPoint(x: compositionFrame.midX, y: compositionFrame.midY)
+        compositionCanvasLayer.setAffineTransform(
             CGAffineTransform(scaleX: imageDisplayScale, y: imageDisplayScale)
         )
+        compositionCanvasLayer.masksToBounds = renderPlan.isCompositionEnabled
+        backgroundLayer.frame = renderPlan.canvasBounds
+        configureBackgroundLayer(for: renderPlan)
+
+        imageContainerLayer.bounds = CGRect(origin: .zero, size: imageSize)
+        imageContainerLayer.position = CGPoint(
+            x: renderPlan.contentFrame.midX,
+            y: renderPlan.contentFrame.midY
+        )
+        imageContainerLayer.setAffineTransform(.identity)
         imageLayer.frame = imageContainerLayer.bounds
         annotationContainerLayer.frame = imageContainerLayer.bounds
         cropOverlayLayer.frame = imageContainerLayer.bounds
+        let previewCornerRadius = renderPlan.isCompositionEnabled ? renderPlan.cornerRadius : 10
+        imageLayer.cornerRadius = previewCornerRadius
+        annotationContainerLayer.cornerRadius = previewCornerRadius
+        configureContentShadow(for: renderPlan, cornerRadius: previewCornerRadius)
         imageContainerLayer.shadowPath = CGPath(
             roundedRect: imageContainerLayer.bounds,
-            cornerWidth: 10,
-            cornerHeight: 10,
+            cornerWidth: previewCornerRadius,
+            cornerHeight: previewCornerRadius,
             transform: nil
         )
         CATransaction.commit()
 
         renderAnnotationLayers()
         renderCropOverlay()
+    }
+
+    private func configureBackgroundLayer(for plan: EditorCompositionRenderPlan) {
+        switch plan.paint {
+        case .none:
+            backgroundLayer.colors = [NSColor.clear.cgColor, NSColor.clear.cgColor]
+            backgroundLayer.locations = [0, 1]
+            backgroundLayer.startPoint = CGPoint(x: 0, y: 0.5)
+            backgroundLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        case let .solid(solidColor):
+            let color = solidColor.color.cgColor
+            backgroundLayer.colors = [color, color]
+            backgroundLayer.locations = [0, 1]
+            backgroundLayer.startPoint = CGPoint(x: 0, y: 0.5)
+            backgroundLayer.endPoint = CGPoint(x: 1, y: 0.5)
+        case let .gradient(gradient):
+            backgroundLayer.colors = gradient.colors.map(\.cgColor)
+            backgroundLayer.locations = gradient.colors.indices.map { index in
+                NSNumber(value: Double(index) / Double(max(1, gradient.colors.count - 1)))
+            }
+            backgroundLayer.startPoint = gradient.startPoint
+            backgroundLayer.endPoint = gradient.endPoint
+        }
+    }
+
+    private func configureContentShadow(
+        for plan: EditorCompositionRenderPlan,
+        cornerRadius: CGFloat
+    ) {
+        imageContainerLayer.shadowColor = NSColor.black.cgColor
+
+        if plan.isCompositionEnabled {
+            imageContainerLayer.shadowOpacity = plan.shadow.isEnabled ? Float(plan.shadow.opacity) : 0
+            imageContainerLayer.shadowRadius = plan.shadow.radius
+            imageContainerLayer.shadowOffset = CGSize(
+                width: plan.shadow.offsetX,
+                height: plan.shadow.offsetY
+            )
+        } else {
+            imageContainerLayer.shadowOpacity = 0.22
+            imageContainerLayer.shadowRadius = 20
+            imageContainerLayer.shadowOffset = CGSize(width: 0, height: 10)
+        }
+
+        imageContainerLayer.shadowPath = CGPath(
+            roundedRect: imageContainerLayer.bounds,
+            cornerWidth: cornerRadius,
+            cornerHeight: cornerRadius,
+            transform: nil
+        )
     }
 
     private func refreshFromViewModel() {
@@ -2419,6 +2519,8 @@ private final class EditorCanvasNSView: NSView, NSTextViewDelegate {
 
     private func updateLayerScale() {
         layer?.contentsScale = currentLayerScale
+        compositionCanvasLayer.contentsScale = currentLayerScale
+        backgroundLayer.contentsScale = currentLayerScale
         imageContainerLayer.contentsScale = currentLayerScale
         imageLayer.contentsScale = currentLayerScale
         annotationContainerLayer.contentsScale = currentLayerScale
@@ -3092,6 +3194,8 @@ private extension View {
             keyboardShortcut("b", modifiers: [])
         case .crop:
             keyboardShortcut("x", modifiers: [])
+        case .background:
+            keyboardShortcut("b", modifiers: [.option])
         case .undo:
             keyboardShortcut("z", modifiers: [.command])
         case .redo:

@@ -10,9 +10,18 @@ import AppKit
 @MainActor
 protocol EditorOutputServicing {
     @discardableResult
-    func copy(image: NSImage, annotations: [AnnotationObject]) -> Bool
+    func copy(
+        image: NSImage,
+        annotations: [AnnotationObject],
+        composition: EditorBackgroundComposition
+    ) -> Bool
 
-    func save(image: NSImage, sourceFileURL: URL?, annotations: [AnnotationObject])
+    func save(
+        image: NSImage,
+        sourceFileURL: URL?,
+        annotations: [AnnotationObject],
+        composition: EditorBackgroundComposition
+    )
 }
 
 @MainActor
@@ -32,8 +41,16 @@ final class EditorOutputService: EditorOutputServicing {
     }
 
     @discardableResult
-    func copy(image: NSImage, annotations: [AnnotationObject]) -> Bool {
-        guard let flattenedImage = flattenedImageRenderer.render(image: image, annotations: annotations) else {
+    func copy(
+        image: NSImage,
+        annotations: [AnnotationObject],
+        composition: EditorBackgroundComposition
+    ) -> Bool {
+        guard let flattenedImage = flattenedImageRenderer.render(
+            image: image,
+            annotations: annotations,
+            composition: composition
+        ) else {
             NSSound.beep()
             return false
         }
@@ -41,8 +58,17 @@ final class EditorOutputService: EditorOutputServicing {
         return clipboardService.copy(flattenedImage)
     }
 
-    func save(image: NSImage, sourceFileURL: URL?, annotations: [AnnotationObject]) {
-        guard let flattenedImage = flattenedImageRenderer.render(image: image, annotations: annotations),
+    func save(
+        image: NSImage,
+        sourceFileURL: URL?,
+        annotations: [AnnotationObject],
+        composition: EditorBackgroundComposition
+    ) {
+        guard let flattenedImage = flattenedImageRenderer.render(
+            image: image,
+            annotations: annotations,
+            composition: composition
+        ),
               let pngData = flattenedImage.pngData()
         else {
             NSSound.beep()
@@ -79,14 +105,23 @@ final class EditorOutputService: EditorOutputServicing {
 
 @MainActor
 protocol EditorFlattenedImageRendering {
-    func render(image: NSImage, annotations: [AnnotationObject]) -> NSImage?
+    func render(
+        image: NSImage,
+        annotations: [AnnotationObject],
+        composition: EditorBackgroundComposition
+    ) -> NSImage?
 }
 
 @MainActor
 final class EditorFlattenedImageRenderer: EditorFlattenedImageRendering {
     private let annotationLayerRenderer = AnnotationLayerRenderer()
+    private let compositionLayoutEngine = EditorCompositionLayoutEngine()
 
-    func render(image: NSImage, annotations: [AnnotationObject]) -> NSImage? {
+    func render(
+        image: NSImage,
+        annotations: [AnnotationObject],
+        composition: EditorBackgroundComposition
+    ) -> NSImage? {
         guard let sourceImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return nil
         }
@@ -98,7 +133,19 @@ final class EditorFlattenedImageRenderer: EditorFlattenedImageRendering {
             return nil
         }
 
-        let outputSize = CGSize(width: sourceImage.width, height: sourceImage.height)
+        let plan = compositionLayoutEngine.makePlan(
+            contentSize: canvasSize,
+            composition: composition
+        )
+        let pixelScale = max(
+            1,
+            CGFloat(sourceImage.width) / canvasSize.width,
+            CGFloat(sourceImage.height) / canvasSize.height
+        )
+        let outputSize = CGSize(
+            width: max(1, round(plan.canvasSize.width * pixelScale)),
+            height: max(1, round(plan.canvasSize.height * pixelScale))
+        )
         guard let context = CGContext(
             data: nil,
             width: Int(outputSize.width),
@@ -114,10 +161,11 @@ final class EditorFlattenedImageRenderer: EditorFlattenedImageRendering {
         let rootLayer = makeLayerTree(
             sourceImage: sourceImage,
             canvasSize: canvasSize,
-            annotations: annotations
+            annotations: annotations,
+            plan: plan
         )
-        let scaleX = outputSize.width / canvasSize.width
-        let scaleY = outputSize.height / canvasSize.height
+        let scaleX = outputSize.width / plan.canvasSize.width
+        let scaleY = outputSize.height / plan.canvasSize.height
 
         context.interpolationQuality = .high
         context.setFillColor(NSColor.clear.cgColor)
@@ -132,33 +180,69 @@ final class EditorFlattenedImageRenderer: EditorFlattenedImageRendering {
             return nil
         }
 
-        return NSImage(cgImage: flattenedImage, size: canvasSize)
+        return NSImage(cgImage: flattenedImage, size: plan.canvasSize)
     }
 
     private func makeLayerTree(
         sourceImage: CGImage,
         canvasSize: CGSize,
-        annotations: [AnnotationObject]
+        annotations: [AnnotationObject],
+        plan: EditorCompositionRenderPlan
     ) -> CALayer {
         let rootLayer = CALayer()
-        rootLayer.frame = CGRect(origin: .zero, size: canvasSize)
-        rootLayer.bounds = CGRect(origin: .zero, size: canvasSize)
+        rootLayer.frame = plan.canvasBounds
+        rootLayer.bounds = plan.canvasBounds
         rootLayer.contentsScale = 1
         rootLayer.masksToBounds = true
 
+        if let backgroundLayer = makeBackgroundLayer(for: plan) {
+            rootLayer.addSublayer(backgroundLayer)
+        }
+
+        let contentPresentationLayer = CALayer()
+        contentPresentationLayer.frame = plan.contentFrame
+        contentPresentationLayer.bounds = CGRect(origin: .zero, size: canvasSize)
+        contentPresentationLayer.contentsScale = 1
+        contentPresentationLayer.masksToBounds = false
+
+        if plan.isCompositionEnabled,
+           plan.shadow.isEnabled,
+           plan.shadow.opacity > 0 {
+            contentPresentationLayer.shadowColor = NSColor.black.cgColor
+            contentPresentationLayer.shadowOpacity = Float(plan.shadow.opacity)
+            contentPresentationLayer.shadowRadius = plan.shadow.radius
+            contentPresentationLayer.shadowOffset = CGSize(
+                width: plan.shadow.offsetX,
+                height: plan.shadow.offsetY
+            )
+            contentPresentationLayer.shadowPath = CGPath(
+                roundedRect: contentPresentationLayer.bounds,
+                cornerWidth: plan.cornerRadius,
+                cornerHeight: plan.cornerRadius,
+                transform: nil
+            )
+        }
+
+        let contentClipLayer = CALayer()
+        contentClipLayer.frame = contentPresentationLayer.bounds
+        contentClipLayer.bounds = contentPresentationLayer.bounds
+        contentClipLayer.contentsScale = 1
+        contentClipLayer.cornerRadius = plan.cornerRadius
+        contentClipLayer.masksToBounds = plan.cornerRadius > 0
+
         let imageLayer = CALayer()
-        imageLayer.frame = rootLayer.bounds
+        imageLayer.frame = contentClipLayer.bounds
         imageLayer.contents = sourceImage
         imageLayer.contentsGravity = .resize
         imageLayer.magnificationFilter = .linear
         imageLayer.minificationFilter = .trilinear
-        rootLayer.addSublayer(imageLayer)
+        contentClipLayer.addSublayer(imageLayer)
 
         let annotationContainerLayer = CALayer()
-        annotationContainerLayer.frame = rootLayer.bounds
+        annotationContainerLayer.frame = contentClipLayer.bounds
         annotationContainerLayer.masksToBounds = true
         annotationContainerLayer.contentsScale = 1
-        rootLayer.addSublayer(annotationContainerLayer)
+        contentClipLayer.addSublayer(annotationContainerLayer)
 
         annotationLayerRenderer.render(
             annotations: annotations,
@@ -170,7 +254,36 @@ final class EditorFlattenedImageRenderer: EditorFlattenedImageRendering {
             selectionHandleSize: 0
         )
 
+        contentPresentationLayer.addSublayer(contentClipLayer)
+        rootLayer.addSublayer(contentPresentationLayer)
+
         return rootLayer
+    }
+
+    private func makeBackgroundLayer(
+        for plan: EditorCompositionRenderPlan
+    ) -> CALayer? {
+        switch plan.paint {
+        case .none:
+            return nil
+        case let .solid(solidColor):
+            let layer = CALayer()
+            layer.frame = plan.canvasBounds
+            layer.backgroundColor = solidColor.color.cgColor
+            layer.contentsScale = 1
+            return layer
+        case let .gradient(gradient):
+            let layer = CAGradientLayer()
+            layer.frame = plan.canvasBounds
+            layer.colors = gradient.colors.map(\.cgColor)
+            layer.locations = gradient.colors.indices.map { index in
+                NSNumber(value: Double(index) / Double(max(1, gradient.colors.count - 1)))
+            }
+            layer.startPoint = gradient.startPoint
+            layer.endPoint = gradient.endPoint
+            layer.contentsScale = 1
+            return layer
+        }
     }
 }
 

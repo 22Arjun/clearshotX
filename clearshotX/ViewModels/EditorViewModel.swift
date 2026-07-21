@@ -113,6 +113,7 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
     case highlight
     case blurPixelate
     case crop
+    case background
     case undo
     case redo
     case copy
@@ -150,6 +151,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             "Blur/Pixelate"
         case .crop:
             "Crop/Resize Canvas"
+        case .background:
+            "Background"
         case .undo:
             "Undo"
         case .redo:
@@ -189,6 +192,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             "square.grid.3x3.fill"
         case .crop:
             "crop"
+        case .background:
+            "photo.on.rectangle.angled"
         case .undo:
             "arrow.uturn.backward"
         case .redo:
@@ -228,6 +233,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             "B"
         case .crop:
             "X"
+        case .background:
+            "⌥B"
         case .undo:
             "⌘Z"
         case .redo:
@@ -267,7 +274,7 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
             .blurPixelate
         case .crop:
             .crop
-        case .undo, .redo, .copy, .save:
+        case .background, .undo, .redo, .copy, .save:
             nil
         }
     }
@@ -285,7 +292,8 @@ enum EditorToolbarAction: String, CaseIterable, Identifiable {
         .smartTextHighlight,
         .highlight,
         .blurPixelate,
-        .crop
+        .crop,
+        .background
     ]
 
     static let historyCommands: [EditorToolbarAction] = [
@@ -375,6 +383,8 @@ final class EditorViewModel: ObservableObject {
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
     @Published private(set) var textFormattingCommand: EditorTextFormattingCommand?
+    @Published private(set) var backgroundComposition = EditorBackgroundComposition.default
+    @Published private(set) var isBackgroundInspectorPresented = false
 
     private let annotationInteractionService: AnnotationInteractionServicing
     private let outputService: EditorOutputServicing
@@ -386,6 +396,7 @@ final class EditorViewModel: ObservableObject {
     private var opacityEditingInitialState: EditorHistoryState?
     private var pixelateIntensityEditingInitialState: EditorHistoryState?
     private var highlightIntensityEditingInitialState: EditorHistoryState?
+    private var backgroundContinuousEditingInitialState: EditorHistoryState?
     private var smartTextWordCache: SmartTextWordCache?
     private var creationControlState: EditorAnnotationControlState?
     private var undoStack: [EditorHistoryState] = []
@@ -421,6 +432,15 @@ final class EditorViewModel: ObservableObject {
 
     var isCropModeActive: Bool {
         activeTool == .crop
+    }
+
+    var backgroundOutputSizeTitle: String {
+        let plan = EditorCompositionLayoutEngine().makePlan(
+            contentSize: image.editorHistoryCanvasSize,
+            composition: backgroundComposition
+        )
+        let scale = editorNativePixelScale
+        return "\(Int(round(plan.canvasSize.width * scale))) × \(Int(round(plan.canvasSize.height * scale))) px"
     }
 
     var shouldShowArrowStyleMenu: Bool {
@@ -544,6 +564,11 @@ final class EditorViewModel: ObservableObject {
             return
         }
 
+        if action == .background {
+            toggleBackgroundInspector()
+            return
+        }
+
         if let tool = action.tool {
             toggleTool(tool)
             return
@@ -558,12 +583,16 @@ final class EditorViewModel: ObservableObject {
             copy()
         case .save:
             save()
-        case .selection, .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop:
+        case .selection, .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop, .background:
             break
         }
     }
 
     func isSelected(_ action: EditorToolbarAction) -> Bool {
+        if action == .background {
+            return isBackgroundInspectorPresented
+        }
+
         if action == .selection {
             return activeTool == nil
         }
@@ -581,8 +610,90 @@ final class EditorViewModel: ObservableObject {
             canUndo
         case .redo:
             canRedo
-        case .selection, .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop, .copy, .save:
+        case .selection, .drawing, .arrow, .line, .numbering, .rectangle, .filledRectangle, .oval, .text, .smartTextHighlight, .highlight, .blurPixelate, .crop, .background, .copy, .save:
             true
+        }
+    }
+
+    func setBackgroundPaint(_ paint: EditorBackgroundPaint) {
+        updateBackgroundComposition { composition in
+            composition.paint = paint
+        }
+    }
+
+    func setBackgroundCanvas(_ canvas: EditorBackgroundCanvas) {
+        updateBackgroundComposition { composition in
+            composition.canvas = canvas
+        }
+    }
+
+    func setBackgroundAlignment(_ alignment: EditorBackgroundAlignment) {
+        updateBackgroundComposition { composition in
+            composition.alignment = alignment
+        }
+    }
+
+    func setBackgroundShadowEnabled(_ isEnabled: Bool) {
+        updateBackgroundComposition { composition in
+            composition.shadow.isEnabled = isEnabled
+        }
+    }
+
+    func beginBackgroundContinuousEditing() {
+        if backgroundContinuousEditingInitialState == nil {
+            backgroundContinuousEditingInitialState = currentHistoryState()
+        }
+    }
+
+    func setBackgroundPadding(_ padding: CGFloat) {
+        updateBackgroundComposition { composition in
+            composition.padding = padding
+        }
+    }
+
+    func setBackgroundCornerRadius(_ cornerRadius: CGFloat) {
+        updateBackgroundComposition { composition in
+            composition.cornerRadius = cornerRadius
+        }
+    }
+
+    func setBackgroundShadowOpacity(_ opacity: CGFloat) {
+        updateBackgroundComposition { composition in
+            composition.shadow.opacity = opacity
+        }
+    }
+
+    func endBackgroundContinuousEditing() {
+        guard let initialState = backgroundContinuousEditingInitialState else {
+            return
+        }
+
+        backgroundContinuousEditingInitialState = nil
+        commitHistoryTransition(from: initialState)
+    }
+
+    func resetBackgroundComposition() {
+        let previousState = currentHistoryState()
+        backgroundComposition = .default
+        recordUndoState(previousState)
+    }
+
+    private func updateBackgroundComposition(
+        _ update: (inout EditorBackgroundComposition) -> Void
+    ) {
+        let previousState = currentHistoryState()
+        var updatedComposition = backgroundComposition
+        update(&updatedComposition)
+        updatedComposition.normalize()
+
+        guard updatedComposition != backgroundComposition else {
+            return
+        }
+
+        backgroundComposition = updatedComposition
+
+        if backgroundContinuousEditingInitialState == nil {
+            recordUndoState(previousState)
         }
     }
 
@@ -1329,11 +1440,20 @@ final class EditorViewModel: ObservableObject {
     }
 
     private func copy() {
-        outputService.copy(image: image, annotations: annotationObjects)
+        outputService.copy(
+            image: image,
+            annotations: annotationObjects,
+            composition: backgroundComposition
+        )
     }
 
     private func save() {
-        outputService.save(image: image, sourceFileURL: sourceFileURL, annotations: annotationObjects)
+        outputService.save(
+            image: image,
+            sourceFileURL: sourceFileURL,
+            annotations: annotationObjects,
+            composition: backgroundComposition
+        )
     }
 
     private func applyCanvasCrop(to cropRect: CGRect) -> Bool {
@@ -1411,6 +1531,11 @@ final class EditorViewModel: ObservableObject {
             width: max(.leastNonzeroMagnitude, CGFloat(sourceImage.width) / canvasBounds.width),
             height: max(.leastNonzeroMagnitude, CGFloat(sourceImage.height) / canvasBounds.height)
         )
+    }
+
+    private var editorNativePixelScale: CGFloat {
+        let scale = canvasPixelScale
+        return max(1, scale.width, scale.height)
     }
 
     private func transformCanvasImage(_ transform: EditorCanvasImageTransform) {
@@ -1893,6 +2018,7 @@ final class EditorViewModel: ObservableObject {
 
     private func selectTool(_ tool: EditorTool) {
         deselectAnnotation()
+        isBackgroundInspectorPresented = false
         activeTool = tool
         draftAnnotationObject = nil
         activeDragSession = nil
@@ -1923,6 +2049,19 @@ final class EditorViewModel: ObservableObject {
         } else {
             selectTool(.crop)
         }
+    }
+
+    private func toggleBackgroundInspector() {
+        if !isBackgroundInspectorPresented {
+            deselectAnnotation()
+            activeTool = nil
+            draftAnnotationObject = nil
+            draftCropRect = nil
+            isCropGridVisible = false
+            activeDragSession = nil
+        }
+
+        isBackgroundInspectorPresented.toggle()
     }
 
     private func activeAnnotationStyle() -> AnnotationStyle {
@@ -2370,7 +2509,8 @@ final class EditorViewModel: ObservableObject {
             image: image,
             imageRevision: imageRevision,
             annotationObjects: annotationObjects,
-            selectedAnnotationID: selectedAnnotationID
+            selectedAnnotationID: selectedAnnotationID,
+            backgroundComposition: backgroundComposition
         )
     }
 
@@ -2379,6 +2519,7 @@ final class EditorViewModel: ObservableObject {
         imageRevision = state.imageRevision
         annotationObjects = state.annotationObjects
         selectedAnnotationID = state.selectedAnnotationID
+        backgroundComposition = state.backgroundComposition
         draftAnnotationObject = nil
         draftCropRect = nil
         activeDragSession = nil
@@ -2501,11 +2642,13 @@ private struct EditorHistoryState: Equatable {
     let imageRevision: UUID
     let annotationObjects: [AnnotationObject]
     let selectedAnnotationID: UUID?
+    let backgroundComposition: EditorBackgroundComposition
 
     static func == (lhs: EditorHistoryState, rhs: EditorHistoryState) -> Bool {
         lhs.imageRevision == rhs.imageRevision &&
             lhs.annotationObjects == rhs.annotationObjects &&
-            lhs.selectedAnnotationID == rhs.selectedAnnotationID
+            lhs.selectedAnnotationID == rhs.selectedAnnotationID &&
+            lhs.backgroundComposition == rhs.backgroundComposition
     }
 }
 
