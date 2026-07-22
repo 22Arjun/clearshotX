@@ -26,6 +26,14 @@ struct ScrollingCaptureHUDState: Equatable {
     var outputPixelWidth: Int
     var outputPixelHeight: Int
     var mode: ScrollingCaptureMode?
+    /// Only meaningful in automatic mode: whether the person explicitly pressed
+    /// Pause, as opposed to auto-scroll being paused only because the cursor is
+    /// currently outside the selected area. Manual mode's `phase` alone already
+    /// reflects user intent directly, since manual pausing has no other cause.
+    var isUserPaused = false
+    /// True only while automatic mode is paused solely because the cursor is
+    /// outside the selected area (and the user has not also pressed Pause).
+    var isAwaitingHover = false
 
     static let starting = ScrollingCaptureHUDState(
         phase: .starting,
@@ -41,11 +49,11 @@ struct ScrollingCaptureHUDState: Equatable {
         case .starting:
             "Preparing scrolling capture…"
         case .ready:
-            "Choose scrolling mode"
+            "Ready to capture"
         case .capturing:
             switch mode {
             case .manual:
-                acceptedFrameCount <= 1 ? "Manual scrolling capture" : "Capturing scroll"
+                acceptedFrameCount <= 1 ? "Scrolling capture" : "Capturing scroll"
             case .automatic:
                 acceptedFrameCount <= 1 ? "Auto-scrolling page" : "Capturing page"
             case nil:
@@ -54,7 +62,7 @@ struct ScrollingCaptureHUDState: Equatable {
         case .guidance:
             "Scroll a little slower"
         case .paused:
-            "Capture paused"
+            isAwaitingHover ? "Auto-scroll paused" : "Capture paused"
         case .finishing:
             "Finishing capture…"
         }
@@ -65,7 +73,7 @@ struct ScrollingCaptureHUDState: Equatable {
         case .starting:
             "Connecting to the selected area"
         case .ready:
-            "Scroll yourself, or let ClearshotX drive the page after you choose Auto Scroll."
+            "Press Start Capture, then scroll naturally. You can switch to Auto Scroll before you start scrolling."
         case .capturing:
             switch mode {
             case .manual:
@@ -82,7 +90,9 @@ struct ScrollingCaptureHUDState: Equatable {
             case .manual:
                 "Resume when you are ready to keep capturing manual scroll movement."
             case .automatic:
-                "Resume to continue automatic scrolling from this position."
+                isAwaitingHover
+                    ? "Move your cursor back over the selected area to continue auto-scrolling."
+                    : "Resume to continue automatic scrolling from this position."
             case nil:
                 "Resume to continue capturing."
             }
@@ -100,12 +110,16 @@ struct ScrollingCaptureHUDState: Equatable {
         acceptedFrameCount > 0 && phase != .finishing
     }
 
-    var canStartAutoScroll: Bool {
+    var canStartCapture: Bool {
         phase == .ready
     }
 
-    var canStartManualScroll: Bool {
-        phase == .ready
+    /// Switching mid-capture only makes sense before any real scroll movement
+    /// has been accepted: once the document has actually grown, there is no
+    /// existing manual progress to hand off, and starting automatic capture
+    /// over would silently discard it.
+    var canSwitchToAutoScroll: Bool {
+        mode == .manual && acceptedFrameCount <= 1 && (phase == .capturing || phase == .guidance)
     }
 
     var canPause: Bool {
@@ -113,7 +127,8 @@ struct ScrollingCaptureHUDState: Equatable {
     }
 
     var pauseButtonTitle: String {
-        phase == .paused ? "Resume" : "Pause"
+        let isEffectivelyPaused = mode == .automatic ? isUserPaused : phase == .paused
+        return isEffectivelyPaused ? "Resume" : "Pause"
     }
 
     var acceptedFramesText: String {
@@ -159,13 +174,17 @@ private extension ScrollingCaptureHUDState {
         progress: ScrollingCaptureProgress,
         phase: ScrollingCaptureHUDPhase
     ) -> ScrollingCaptureHUDState {
+        // A frame decision only ever arrives while actively capturing, never
+        // while paused, so any pause-related state from a prior pause is stale.
         ScrollingCaptureHUDState(
             phase: phase,
             acceptedFrameCount: progress.acceptedFrameCount,
             rejectedFrameCount: progress.rejectedFrameCount,
             outputPixelWidth: progress.outputPixelWidth,
             outputPixelHeight: progress.outputPixelHeight,
-            mode: mode
+            mode: mode,
+            isUserPaused: false,
+            isAwaitingHover: false
         )
     }
 }

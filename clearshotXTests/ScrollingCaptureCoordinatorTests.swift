@@ -191,37 +191,59 @@ final class ScrollingCapturePreviewBuilderTests: XCTestCase {
 
 @MainActor
 final class ScrollingCaptureCoordinatorTests: XCTestCase {
-    func testAutomaticCaptureWaitsForExplicitStartButton() async throws {
+    func testStartCaptureWaitsForExplicitButtonThenAllowsSwitchingToAutoScroll() async throws {
+        let source = FakeScrollingFrameSource()
         let autoCapture = FakeAutoCapture()
         let hud = FakeScrollingHUDPresenter()
+        let region = CGRect(x: 10, y: 20, width: 300, height: 200)
         let coordinator = ScrollingCaptureCoordinator(
+            frameSource: source,
             autoCapture: autoCapture,
             captureStore: FakeCaptureStore(),
             hudPresenter: hud,
-            postEventAccessProvider: { true }
+            postEventAccessProvider: { true },
+            // Deterministic hovering: the real system cursor position is
+            // irrelevant to this test and must not affect it.
+            mouseLocationProvider: { CGPoint(x: region.midX, y: region.midY) }
         )
-        let started = expectation(description: "Auto capture started")
+        let manualStarted = expectation(description: "Manual source started")
+        let autoStarted = expectation(description: "Auto capture started")
         let completed = expectation(description: "Started capture cancelled")
-        autoCapture.onStart = {
-            started.fulfill()
-        }
+        source.onStart = { manualStarted.fulfill() }
+        autoCapture.onStart = { autoStarted.fulfill() }
 
         try await coordinator.start(
-            selectedRegion: CGRect(x: 10, y: 20, width: 300, height: 200)
+            selectedRegion: region
         ) { _ in
             completed.fulfill()
         }
 
         XCTAssertEqual(coordinator.phase, .ready)
         XCTAssertEqual(hud.viewModel?.state.phase, .ready)
+        XCTAssertTrue(hud.viewModel?.state.canStartCapture ?? false)
+        XCTAssertEqual(source.startCount, 0)
         XCTAssertEqual(autoCapture.startCount, 0)
 
-        hud.viewModel?.startAutoScroll()
-        await fulfillment(of: [started], timeout: 2)
+        // Pressing Start Capture begins manual scrolling immediately; there is
+        // no separate up-front mode choice any more.
+        hud.viewModel?.startCapture()
+        await fulfillment(of: [manualStarted], timeout: 2)
+        await Task.yield()
+
+        XCTAssertEqual(coordinator.phase, .capturing)
+        XCTAssertEqual(hud.viewModel?.state.mode, .manual)
+        XCTAssertTrue(hud.viewModel?.state.canSwitchToAutoScroll ?? false)
+
+        // Before any real scroll, Auto Scroll can still promote the capture.
+        hud.viewModel?.switchToAutoScroll()
+        await fulfillment(of: [autoStarted], timeout: 2)
         await Task.yield()
 
         XCTAssertEqual(autoCapture.startCount, 1)
         XCTAssertEqual(coordinator.phase, .capturing)
+        XCTAssertEqual(hud.viewModel?.state.mode, .automatic)
+        XCTAssertFalse(hud.viewModel?.state.canSwitchToAutoScroll ?? true)
+        XCTAssertEqual(source.stopCount, 1, "The manual frame source must be torn down")
 
         coordinator.cancel()
         await fulfillment(of: [completed], timeout: 2)
@@ -258,7 +280,7 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .idle)
     }
 
-    func testManualScrollCanBeChosenWhenAutoScrollIsAvailable() async throws {
+    func testStartCaptureBeginsManualScrollWhenAutoScrollIsAvailable() async throws {
         let source = FakeScrollingFrameSource()
         let autoCapture = FakeAutoCapture()
         let hud = FakeScrollingHUDPresenter()
@@ -288,7 +310,7 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(source.startCount, 0)
         XCTAssertEqual(autoCapture.startCount, 0)
 
-        hud.viewModel?.startManualScroll()
+        hud.viewModel?.startCapture()
         await fulfillment(of: [started], timeout: 2)
         await Task.yield()
 
@@ -314,17 +336,21 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .idle)
     }
 
-    func testAutoScrollPermissionIsRequestedOnlyWhenStartButtonIsPressed() async throws {
+    func testAutoScrollPermissionIsRequestedOnlyWhenSwitchingFromManualCapture() async throws {
+        let source = FakeScrollingFrameSource()
         let autoCapture = FakeAutoCapture()
         let hud = FakeScrollingHUDPresenter()
         let coordinator = ScrollingCaptureCoordinator(
+            frameSource: source,
             autoCapture: autoCapture,
             captureStore: FakeCaptureStore(),
             hudPresenter: hud,
             postEventAccessProvider: { false }
         )
+        let manualStarted = expectation(description: "Manual source started")
         let completed = expectation(description: "Permission denied")
         var receivedError: Error?
+        source.onStart = { manualStarted.fulfill() }
 
         try await coordinator.start(
             selectedRegion: CGRect(x: 10, y: 20, width: 300, height: 200)
@@ -338,7 +364,12 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .ready)
         XCTAssertEqual(autoCapture.startCount, 0)
 
-        hud.viewModel?.startAutoScroll()
+        hud.viewModel?.startCapture()
+        await fulfillment(of: [manualStarted], timeout: 2)
+        await Task.yield()
+        XCTAssertEqual(coordinator.phase, .capturing)
+
+        hud.viewModel?.switchToAutoScroll()
         await fulfillment(of: [completed], timeout: 2)
 
         XCTAssertEqual(
@@ -346,6 +377,7 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
             .postEventPermissionDenied
         )
         XCTAssertEqual(autoCapture.startCount, 0)
+        XCTAssertEqual(source.stopCount, 1, "The manual frame source must be torn down")
         XCTAssertEqual(coordinator.phase, .idle)
     }
 
@@ -421,6 +453,121 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         XCTAssertEqual(store.storeCount, 1)
         XCTAssertEqual(source.stopCount, 1)
         XCTAssertEqual(coordinator.phase, .idle)
+    }
+
+    func testAutoScrollPausesWhenCursorLeavesSelectedRegionAndResumesOnReturn() async throws {
+        let source = FakeScrollingFrameSource()
+        let autoCapture = FakeAutoCapture()
+        let hud = FakeScrollingHUDPresenter()
+        let region = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let insidePoint = CGPoint(x: 50, y: 50)
+        let outsidePoint = CGPoint(x: 500, y: 500)
+        var mouseLocation = insidePoint
+        let coordinator = ScrollingCaptureCoordinator(
+            frameSource: source,
+            autoCapture: autoCapture,
+            captureStore: FakeCaptureStore(),
+            hudPresenter: hud,
+            postEventAccessProvider: { true },
+            mouseLocationProvider: { mouseLocation },
+            hoverPollInterval: .milliseconds(5)
+        )
+        let manualStarted = expectation(description: "Manual source started")
+        let autoStarted = expectation(description: "Auto capture started")
+        source.onStart = { manualStarted.fulfill() }
+        autoCapture.onStart = { autoStarted.fulfill() }
+
+        try await coordinator.start(selectedRegion: region) { _ in }
+        hud.viewModel?.startCapture()
+        await fulfillment(of: [manualStarted], timeout: 2)
+        await Task.yield()
+        hud.viewModel?.switchToAutoScroll()
+        await fulfillment(of: [autoStarted], timeout: 2)
+        await Task.yield()
+
+        XCTAssertEqual(coordinator.phase, .capturing)
+        XCTAssertFalse(hud.viewModel?.state.isAwaitingHover ?? true)
+
+        mouseLocation = outsidePoint
+        await waitUntilTrue(timeout: 1) { coordinator.phase == .paused }
+        XCTAssertEqual(coordinator.phase, .paused)
+        XCTAssertTrue(hud.viewModel?.state.isAwaitingHover ?? false)
+        XCTAssertFalse(hud.viewModel?.state.isUserPaused ?? true)
+        XCTAssertEqual(autoCapture.pauseCallsSnapshot.last, true)
+
+        mouseLocation = insidePoint
+        await waitUntilTrue(timeout: 1) { coordinator.phase == .capturing }
+        XCTAssertEqual(coordinator.phase, .capturing)
+        XCTAssertFalse(hud.viewModel?.state.isAwaitingHover ?? true)
+        XCTAssertEqual(autoCapture.pauseCallsSnapshot.last, false)
+
+        coordinator.cancel()
+    }
+
+    func testExplicitPauseSurvivesLeavingAndReenteringTheSelectedRegion() async throws {
+        let source = FakeScrollingFrameSource()
+        let autoCapture = FakeAutoCapture()
+        let hud = FakeScrollingHUDPresenter()
+        let region = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let insidePoint = CGPoint(x: 50, y: 50)
+        let outsidePoint = CGPoint(x: 500, y: 500)
+        var mouseLocation = insidePoint
+        let coordinator = ScrollingCaptureCoordinator(
+            frameSource: source,
+            autoCapture: autoCapture,
+            captureStore: FakeCaptureStore(),
+            hudPresenter: hud,
+            postEventAccessProvider: { true },
+            mouseLocationProvider: { mouseLocation },
+            hoverPollInterval: .milliseconds(5)
+        )
+        let manualStarted = expectation(description: "Manual source started")
+        let autoStarted = expectation(description: "Auto capture started")
+        source.onStart = { manualStarted.fulfill() }
+        autoCapture.onStart = { autoStarted.fulfill() }
+
+        try await coordinator.start(selectedRegion: region) { _ in }
+        hud.viewModel?.startCapture()
+        await fulfillment(of: [manualStarted], timeout: 2)
+        await Task.yield()
+        hud.viewModel?.switchToAutoScroll()
+        await fulfillment(of: [autoStarted], timeout: 2)
+        await Task.yield()
+        XCTAssertEqual(coordinator.phase, .capturing)
+
+        // An explicit Pause while hovering inside the region.
+        hud.viewModel?.togglePause()
+        XCTAssertEqual(coordinator.phase, .paused)
+        XCTAssertTrue(hud.viewModel?.state.isUserPaused ?? false)
+        XCTAssertFalse(hud.viewModel?.state.isAwaitingHover ?? true)
+
+        // Leaving and returning must not silently clear an explicit pause.
+        mouseLocation = outsidePoint
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(coordinator.phase, .paused)
+        mouseLocation = insidePoint
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertEqual(coordinator.phase, .paused)
+        XCTAssertTrue(hud.viewModel?.state.isUserPaused ?? false)
+
+        // Only an explicit Resume while hovering inside actually resumes.
+        hud.viewModel?.togglePause()
+        XCTAssertEqual(coordinator.phase, .capturing)
+        XCTAssertFalse(hud.viewModel?.state.isUserPaused ?? true)
+
+        coordinator.cancel()
+    }
+}
+
+private func waitUntilTrue(
+    timeout: TimeInterval = 1,
+    pollInterval: Duration = .milliseconds(5),
+    _ condition: () -> Bool
+) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() {
+        if Date() >= deadline { return }
+        try? await Task.sleep(for: pollInterval)
     }
 }
 
@@ -587,12 +734,19 @@ private nonisolated final class FakeAutoCapture:
     private let lock = NSLock()
     private var starts = 0
     private var completion: CompletionHandler?
+    private var pauseCalls: [Bool] = []
     var onStart: (() -> Void)?
 
     var startCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return starts
+    }
+
+    var pauseCallsSnapshot: [Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return pauseCalls
     }
 
     func start(
@@ -613,7 +767,12 @@ private nonisolated final class FakeAutoCapture:
         )
     }
 
-    func setPaused(_ isPaused: Bool) {}
+    func setPaused(_ isPaused: Bool) {
+        lock.lock()
+        pauseCalls.append(isPaused)
+        lock.unlock()
+    }
+
     func finish() {}
 
     func cancel() {

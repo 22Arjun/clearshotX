@@ -12,22 +12,14 @@ struct ScrollingCaptureControlsView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if viewModel.state.canStartAutoScroll {
+            if viewModel.state.canStartCapture {
                 Button {
-                    viewModel.startManualScroll()
+                    viewModel.startCapture()
                 } label: {
-                    Label("Manual Scroll", systemImage: "hand.draw.fill")
-                }
-                .buttonStyle(ScrollingCapturePillButtonStyle(emphasized: false))
-                .help("Capture while you scroll manually")
-
-                Button {
-                    viewModel.startAutoScroll()
-                } label: {
-                    Label("Auto Scroll", systemImage: "arrow.down.circle.fill")
+                    Label("Start Capture", systemImage: "record.circle")
                 }
                 .buttonStyle(ScrollingCapturePillButtonStyle(emphasized: true))
-                .help("Start automatic scrolling")
+                .help("Begin capturing as you scroll")
             } else {
                 Button {
                     viewModel.cancel()
@@ -39,12 +31,26 @@ struct ScrollingCaptureControlsView: View {
                 Button {
                     viewModel.togglePause()
                 } label: {
-                    Image(systemName: viewModel.state.phase == .paused ? "play.fill" : "pause.fill")
-                        .frame(width: 12, height: 12)
+                    Image(
+                        systemName: viewModel.state.pauseButtonTitle == "Resume"
+                            ? "play.fill"
+                            : "pause.fill"
+                    )
+                    .frame(width: 12, height: 12)
                 }
                 .buttonStyle(ScrollingCapturePillButtonStyle(emphasized: false))
                 .disabled(!viewModel.state.canPause)
                 .help(viewModel.state.pauseButtonTitle)
+
+                if viewModel.state.canSwitchToAutoScroll {
+                    Button {
+                        viewModel.switchToAutoScroll()
+                    } label: {
+                        Label("Auto Scroll", systemImage: "arrow.down.circle.fill")
+                    }
+                    .buttonStyle(ScrollingCapturePillButtonStyle(emphasized: false))
+                    .help("Switch to automatic scrolling")
+                }
 
                 Button {
                     viewModel.finish()

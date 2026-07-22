@@ -14,8 +14,8 @@ final class ScrollingCaptureHUDViewModel: ObservableObject {
     private let finishHandler: () -> Void
     private let cancelHandler: () -> Void
     private let pauseHandler: () -> Void
-    private let startAutoScrollHandler: () -> Void
-    private let startManualScrollHandler: () -> Void
+    private let startCaptureHandler: () -> Void
+    private let switchToAutoScrollHandler: () -> Void
     private var pendingState: ScrollingCaptureHUDState?
     private var statePublicationTask: Task<Void, Never>?
 
@@ -23,14 +23,14 @@ final class ScrollingCaptureHUDViewModel: ObservableObject {
         finish: @escaping () -> Void,
         cancel: @escaping () -> Void,
         togglePause: @escaping () -> Void,
-        startAutoScroll: @escaping () -> Void,
-        startManualScroll: @escaping () -> Void
+        startCapture: @escaping () -> Void,
+        switchToAutoScroll: @escaping () -> Void
     ) {
         finishHandler = finish
         cancelHandler = cancel
         pauseHandler = togglePause
-        startAutoScrollHandler = startAutoScroll
-        startManualScrollHandler = startManualScroll
+        startCaptureHandler = startCapture
+        switchToAutoScrollHandler = switchToAutoScroll
     }
 
     func update(_ state: ScrollingCaptureHUDState) {
@@ -82,13 +82,13 @@ final class ScrollingCaptureHUDViewModel: ObservableObject {
         pauseHandler()
     }
 
-    func startAutoScroll() {
-        guard state.canStartAutoScroll else { return }
-        startAutoScrollHandler()
+    func startCapture() {
+        guard state.canStartCapture else { return }
+        startCaptureHandler()
     }
 
-    func startManualScroll() {
-        guard state.canStartManualScroll else { return }
-        startManualScrollHandler()
+    func switchToAutoScroll() {
+        guard state.canSwitchToAutoScroll else { return }
+        switchToAutoScrollHandler()
     }
 }

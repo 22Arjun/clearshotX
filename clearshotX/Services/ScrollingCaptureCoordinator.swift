@@ -29,6 +29,8 @@ final class ScrollingCaptureCoordinator {
     private let hudPresenter: ScrollingCaptureHUDPresenting
     private let configuration: ScrollingCaptureConfiguration
     private let postEventAccessProvider: () -> Bool
+    private let mouseLocationProvider: () -> CGPoint
+    private let hoverPollInterval: Duration
 
     private var activeCaptureID: UUID?
     private var selectedRegion: CGRect?
@@ -40,6 +42,15 @@ final class ScrollingCaptureCoordinator {
     private var hudState: ScrollingCaptureHUDState = .starting
     private var consecutiveRejections = 0
 
+    // Automatic-mode hover gating: scrolling only actually advances while the
+    // cursor is over the selected area. `isUserPausedAuto` tracks the explicit
+    // Pause button independently of hover, since leaving the area must never
+    // silently clear a pause the user asked for, and moving back in must never
+    // silently resume one they didn't.
+    private var hoverMonitorTask: Task<Void, Never>?
+    private var isUserPausedAuto = false
+    private var isHoveringSelectedRegion = true
+
     init(
         frameSource: ScrollingCaptureFrameSourcing = ScrollingCaptureFrameSource(),
         autoCapture: ScrollingCaptureAutoCapturing? = nil,
@@ -49,7 +60,9 @@ final class ScrollingCaptureCoordinator {
         configuration: ScrollingCaptureConfiguration = ScrollingCaptureConfiguration(),
         postEventAccessProvider: @escaping () -> Bool = {
             CGPreflightPostEventAccess() || CGRequestPostEventAccess()
-        }
+        },
+        mouseLocationProvider: @escaping () -> CGPoint = { NSEvent.mouseLocation },
+        hoverPollInterval: Duration = .milliseconds(80)
     ) {
         self.frameSource = frameSource
         self.autoCapture = usesAutomaticCapture
@@ -61,6 +74,8 @@ final class ScrollingCaptureCoordinator {
         self.hudPresenter = hudPresenter ?? ScrollingCaptureHUDManager()
         self.configuration = configuration
         self.postEventAccessProvider = postEventAccessProvider
+        self.mouseLocationProvider = mouseLocationProvider
+        self.hoverPollInterval = hoverPollInterval
     }
 
     func start(
@@ -76,8 +91,8 @@ final class ScrollingCaptureCoordinator {
             finish: { [weak self] in self?.finish() },
             cancel: { [weak self] in self?.cancel() },
             togglePause: { [weak self] in self?.togglePause() },
-            startAutoScroll: { [weak self] in self?.startAutoScroll() },
-            startManualScroll: { [weak self] in self?.startManualScroll() }
+            startCapture: { [weak self] in self?.startCapture() },
+            switchToAutoScroll: { [weak self] in self?.switchToAutoScroll() }
         )
 
         activeCaptureID = captureID
@@ -110,7 +125,7 @@ final class ScrollingCaptureCoordinator {
         }
     }
 
-    func startManualScroll() {
+    func startCapture() {
         guard phase == .ready,
               let selectedRegion,
               let captureID = activeCaptureID
@@ -137,31 +152,54 @@ final class ScrollingCaptureCoordinator {
         }
     }
 
-    func startAutoScroll() {
-        guard phase == .ready,
+    /// Promotes an in-progress manual capture to automatic scrolling. Only
+    /// reachable before any real scroll has been accepted (the HUD hides the
+    /// button once it has), so there is no accumulated manual progress to hand
+    /// off — the single held frame is simply discarded and automatic capture
+    /// starts exactly as it would from a fresh selection.
+    func switchToAutoScroll() {
+        guard phase == .capturing,
+              activeMode == .manual,
               let autoCapture,
+              let worker,
               let selectedRegion,
               let captureID = activeCaptureID
         else {
             return
         }
 
-        activeMode = .automatic
         guard postEventAccessProvider() else {
-            complete(
-                .failure(ScrollingCaptureAutoCaptureError.postEventPermissionDenied),
-                captureID: captureID
-            )
+            // The manual source is still live at this point; it must be torn
+            // down explicitly here, unlike the old ready-phase permission
+            // check, which ran before any frame source had started.
+            frameSource.setFrameDeliveryEnabled(false)
+            worker.cancel()
+            self.worker = nil
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                try? await self.frameSource.stop()
+                self.complete(
+                    .failure(ScrollingCaptureAutoCaptureError.postEventPermissionDenied),
+                    captureID: captureID
+                )
+            }
             return
         }
 
+        activeMode = .automatic
         phase = .starting
         hudState.phase = .starting
         hudState.mode = .automatic
         hudViewModel?.update(hudState)
 
+        frameSource.setFrameDeliveryEnabled(false)
+        worker.cancel()
+        self.worker = nil
+
         Task { @MainActor [weak self] in
             guard let self else { return }
+            try? await self.frameSource.stop()
+            guard self.activeCaptureID == captureID else { return }
             do {
                 let geometry = try await autoCapture.start(
                     selectedRegion: selectedRegion,
@@ -190,6 +228,7 @@ final class ScrollingCaptureCoordinator {
                 self.phase = .capturing
                 self.hudState.phase = .capturing
                 self.hudViewModel?.update(self.hudState)
+                self.startHoverMonitor(selectedRegion: selectedRegion, captureID: captureID)
             } catch {
                 guard self.activeCaptureID == captureID else { return }
                 self.complete(.failure(error), captureID: captureID)
@@ -251,6 +290,7 @@ final class ScrollingCaptureCoordinator {
             return
         }
         if activeMode == .automatic, let autoCapture {
+            stopHoverMonitor()
             phase = .finishing
             hudState.phase = .finishing
             hudViewModel?.update(hudState)
@@ -276,6 +316,7 @@ final class ScrollingCaptureCoordinator {
         }
 
         if activeMode == .automatic, let autoCapture {
+            stopHoverMonitor()
             autoCapture.cancel()
             return
         }
@@ -293,18 +334,14 @@ final class ScrollingCaptureCoordinator {
     }
 
     func togglePause() {
-        if activeMode == .automatic, let autoCapture {
+        if activeMode == .automatic, let captureID = activeCaptureID {
             switch phase {
-            case .capturing:
-                autoCapture.setPaused(true)
-                phase = .paused
-                hudState.phase = .paused
-                hudViewModel?.update(hudState)
-            case .paused:
-                autoCapture.setPaused(false)
-                phase = .capturing
-                hudState.phase = .capturing
-                hudViewModel?.update(hudState)
+            case .capturing, .paused:
+                // Toggles only the user's own intent; the effective paused
+                // state combines this with the current hover state so leaving
+                // the area can never silently clear an explicit pause.
+                isUserPausedAuto.toggle()
+                syncAutoPauseState(captureID: captureID)
             default:
                 break
             }
@@ -388,7 +425,13 @@ final class ScrollingCaptureCoordinator {
             consecutiveRejections: &consecutiveRejections
         )
         if phase == .paused {
+            // A decision can rarely still be in flight just as a pause takes
+            // effect. The reducer resets pause-related fields unconditionally,
+            // so restore them here rather than showing a momentarily wrong
+            // Pause/Resume label or hover message.
             hudState.phase = .paused
+            hudState.isUserPaused = isUserPausedAuto
+            hudState.isAwaitingHover = !isUserPausedAuto && !isHoveringSelectedRegion
         }
         hudViewModel?.update(hudState)
     }
@@ -398,6 +441,7 @@ final class ScrollingCaptureCoordinator {
         captureID: UUID
     ) {
         guard activeCaptureID == captureID else { return }
+        stopHoverMonitor()
         switch result {
         case let .success(image?):
             do {
@@ -502,6 +546,7 @@ final class ScrollingCaptureCoordinator {
     }
 
     private func reset() {
+        stopHoverMonitor()
         hudPresenter.dismiss()
         phase = .idle
         activeCaptureID = nil
@@ -513,6 +558,64 @@ final class ScrollingCaptureCoordinator {
         hudViewModel = nil
         hudState = .starting
         consecutiveRejections = 0
+        isUserPausedAuto = false
+        isHoveringSelectedRegion = true
+    }
+
+    // MARK: - Automatic-mode hover gating
+
+    /// Starts polling the cursor position against the selected area. Automatic
+    /// scrolling only actually advances while hovering inside it; leaving pauses
+    /// it immediately and returning resumes it, unless the user has also
+    /// explicitly pressed Pause.
+    private func startHoverMonitor(selectedRegion: CGRect, captureID: UUID) {
+        hoverMonitorTask?.cancel()
+        isUserPausedAuto = false
+        isHoveringSelectedRegion = selectedRegion.contains(mouseLocationProvider())
+        syncAutoPauseState(captureID: captureID)
+
+        hoverMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: self.hoverPollInterval)
+                if Task.isCancelled { return }
+                self.pollHoverState(selectedRegion: selectedRegion, captureID: captureID)
+            }
+        }
+    }
+
+    private func pollHoverState(selectedRegion: CGRect, captureID: UUID) {
+        guard activeCaptureID == captureID, activeMode == .automatic else { return }
+        let isHovering = selectedRegion.contains(mouseLocationProvider())
+        guard isHovering != isHoveringSelectedRegion else { return }
+        isHoveringSelectedRegion = isHovering
+        syncAutoPauseState(captureID: captureID)
+    }
+
+    private func stopHoverMonitor() {
+        hoverMonitorTask?.cancel()
+        hoverMonitorTask = nil
+    }
+
+    /// Combines the user's own Pause intent with the current hover state into
+    /// the single paused/running signal the auto-capture controller receives,
+    /// and keeps the HUD's phase and messaging in sync with the reason.
+    private func syncAutoPauseState(captureID: UUID) {
+        guard activeCaptureID == captureID,
+              activeMode == .automatic,
+              let autoCapture,
+              phase == .capturing || phase == .paused
+        else {
+            return
+        }
+
+        let isEffectivelyPaused = isUserPausedAuto || !isHoveringSelectedRegion
+        autoCapture.setPaused(isEffectivelyPaused)
+        phase = isEffectivelyPaused ? .paused : .capturing
+        hudState.phase = isEffectivelyPaused ? .paused : .capturing
+        hudState.isUserPaused = isUserPausedAuto
+        hudState.isAwaitingHover = isEffectivelyPaused && !isUserPausedAuto
+        hudViewModel?.update(hudState)
     }
 }
 
