@@ -5,6 +5,7 @@
 
 import AppKit
 import Combine
+import QuartzCore
 import SwiftUI
 
 @MainActor
@@ -21,7 +22,10 @@ protocol ScrollingCaptureHUDPresenting: AnyObject {
 /// All app-owned windows are excluded by the ScreenCaptureKit content filter.
 @MainActor
 final class ScrollingCaptureHUDManager: ScrollingCaptureHUDPresenting {
-    private let previewMaximumSize = NSSize(width: 232, height: 420)
+    // This is deliberately a document miniature, not an information card. The
+    // larger portrait bounds make the rendered page legible while keeping it
+    // outside the selected region on ordinary desktop layouts.
+    private let previewMaximumSize = NSSize(width: 280, height: 500)
     private let controlsSize = NSSize(width: 328, height: 54)
     private let edgeMargin: CGFloat = 12
 
@@ -43,10 +47,10 @@ final class ScrollingCaptureHUDManager: ScrollingCaptureHUDPresenting {
         let previewSize = NSSize(width: 1, height: 1)
         let previewPanel = makePanel(contentSize: previewSize)
         previewPanel.ignoresMouseEvents = true
-        // Unlike the other borderless panels, the page miniature reads as a
-        // floating card (white background, rounded corners) rather than raw
-        // pixels pasted on the desktop, so it earns a real window shadow.
+        // The miniature is only the accepted page pixels. A light shadow gives
+        // it separation from the desktop without surrounding it in HUD chrome.
         previewPanel.hasShadow = true
+        previewPanel.alphaValue = 0
         let previewView = ScrollingCapturePreviewImageView(frame: .zero)
         previewView.frame = NSRect(origin: .zero, size: previewSize)
         previewView.autoresizingMask = [.width, .height]
@@ -225,15 +229,21 @@ final class ScrollingCaptureHUDManager: ScrollingCaptureHUDPresenting {
             contentSize: contentSize
         )
 
-        // The bitmap itself updates immediately. Animate only the small geometry
-        // delta, and finish before the next 30 fps preview can arrive; longer,
-        // overlapping animations make the miniature visibly trail the capture.
+        // Keep the preview's top edge aligned to the selected page, then grow
+        // and rescale it as one continuous document. The capture pipeline only
+        // publishes accepted seams, so every animation state is truthful.
         guard panel.frame.width > 1.5, panel.frame.height > 1.5 else {
             panel.setFrame(targetFrame, display: true)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.14
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().alphaValue = 1
+            }
             return
         }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.03
+            context.duration = 0.14
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             context.allowsImplicitAnimation = true
             panel.animator().setFrame(targetFrame, display: true)
         }
@@ -277,21 +287,19 @@ final class ScrollingCaptureHUDManager: ScrollingCaptureHUDPresenting {
 /// avoids a SwiftUI layout/diff pass for every accepted strip and presents the new
 /// miniature with one Core Animation contents swap.
 private final class ScrollingCapturePreviewImageView: NSView {
-    private static let cornerRadius: CGFloat = 9
+    private static let cornerRadius: CGFloat = 10
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        // A plain white card with rounded corners and a hairline border reads as
-        // a floating miniature rather than raw pixels pasted on the desktop.
-        layer?.backgroundColor = NSColor.white.cgColor
+        // Do not draw a panel/card behind the page. The side display is the
+        // rendered capture itself — its own page background defines its edges.
+        layer?.backgroundColor = NSColor.clear.cgColor
         layer?.contentsGravity = .resizeAspect
         layer?.minificationFilter = .linear
         layer?.magnificationFilter = .linear
         layer?.masksToBounds = true
         layer?.cornerRadius = Self.cornerRadius
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor.black.withAlphaComponent(0.10).cgColor
     }
 
     @available(*, unavailable)

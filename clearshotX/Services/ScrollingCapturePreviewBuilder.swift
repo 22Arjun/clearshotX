@@ -11,14 +11,16 @@ import Foundation
 nonisolated final class ScrollingCapturePreviewBuilder {
     private let maximumSize: CGSize
     private let contentInsets: ScrollingCaptureContentInsets
-    private let scaleStep: CGFloat = 0.96
+    // Fine scale tiers avoid the visually noticeable 4% thumbnail jumps while
+    // retaining bounded, inexpensive preview rendering for very long captures.
+    private let scaleStep: CGFloat = 0.985
 
     private var previewImage: CGImage?
     private var sourceWidth = 0
     private var sourceHeight = 0
 
     init(
-        maximumSize: CGSize = CGSize(width: 232, height: 420),
+        maximumSize: CGSize = CGSize(width: 280, height: 500),
         contentInsets: ScrollingCaptureContentInsets
     ) {
         self.maximumSize = CGSize(
@@ -189,8 +191,8 @@ nonisolated final class ScrollingCapturePreviewBuilder {
 
         // Once height becomes the limiting dimension, quantizing the backing
         // scale prevents the already-built page from being resampled on every
-        // accepted strip. Four-percent tiers are visually smooth while reducing
-        // cumulative thumbnail blur and CPU work by an order of magnitude.
+        // accepted strip. Fine tiers keep the visible document growth smooth
+        // while preserving bounded preview work.
         let scale: CGFloat
         if rawScale >= widthLimitedScale {
             scale = widthLimitedScale
@@ -273,7 +275,7 @@ nonisolated final class ScrollingCapturePreviewPipeline: @unchecked Sendable {
     private var isPublicationScheduled = false
 
     init(
-        maximumSize: CGSize = CGSize(width: 232, height: 420),
+        maximumSize: CGSize = CGSize(width: 280, height: 500),
         contentInsets: ScrollingCaptureContentInsets,
         maximumPublicationsPerSecond: Double = 30,
         publication: @escaping Publication
