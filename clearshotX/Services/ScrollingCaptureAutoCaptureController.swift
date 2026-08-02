@@ -9,11 +9,22 @@ import Foundation
 nonisolated struct ScrollingCaptureAutoCaptureConfiguration: Equatable, Sendable {
     /// Scroll in AppKit points; the captured offset is measured independently in
     /// native pixels, so Retina output never depends on this estimate.
-    var viewportStepFraction = 0.58
+    /// A deliberately short, readable move. It leaves generous registration
+    /// overlap while allowing the person to follow the page and press Done at a
+    /// meaningful boundary instead of watching viewport-sized jumps.
+    var viewportStepFraction = 0.32
     var minimumStepPoints = 12
+    /// Each logical step is delivered as small continuous-wheel pulses. This is
+    /// what makes the selected app visibly scroll rather than snap between two
+    /// far-apart positions.
+    var maximumPulsePoints = 36
+    var pulseInterval: Duration = .milliseconds(16)
+    /// Keeps each accepted page position visible long enough to inspect before
+    /// the next automatic move begins.
+    var readableStepPause: Duration = .milliseconds(170)
     var maximumRetries = 5
-    var initialSettleDelay: Duration = .milliseconds(40)
-    var settleProbeDelay: Duration = .milliseconds(18)
+    var initialSettleDelay: Duration = .milliseconds(90)
+    var settleProbeDelay: Duration = .milliseconds(24)
     var maximumSettleProbes = 5
     var stationaryStepsToFinish = 2
     var maximumSteps: Int?
@@ -240,11 +251,16 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
             if state.isCancelled { return nil }
             if state.shouldFinish { break }
 
-            let step = try await captureReliableStep(
+            guard let step = try await captureReliableStep(
                 previous: previous,
                 initialDelta: baseDelta,
                 location: selectionCenter
-            )
+            ) else {
+                // Done was pressed during a visible micro-scroll. The preceding
+                // stitched frame is already complete, so finish immediately
+                // rather than risk appending a partially moved viewport.
+                break captureLoop
+            }
             steps += 1
 
             switch step.match.disposition {
@@ -309,6 +325,7 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
                 let decision = ScrollingCaptureFrameDecision.appended(progress)
                 onProgress(decision)
                 previewPipeline.submit(frame: step.frame, decision: decision)
+                try await Task.sleep(for: autoConfiguration.readableStepPause)
 
             case .retryWithSmallerScrollDelta:
                 // captureReliableStep exhausts retries before returning this case.
@@ -324,14 +341,20 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
         previous: CGImage,
         initialDelta: Int,
         location: CGPoint
-    ) async throws -> StepResult {
+    ) async throws -> StepResult? {
         var delta = initialDelta
         var best: StepResult?
 
         for attempt in 0..<max(1, autoConfiguration.maximumRetries) {
             try Task.checkCancellation()
-            try scrollDriver.scroll(verticalDelta: delta, at: location)
+            guard try await driveSmoothScroll(
+                verticalDelta: delta,
+                at: location
+            ) else {
+                return nil
+            }
             let candidate = try await captureSettledFrame()
+            if currentControl().shouldFinish { return nil }
             let match = try stitchEngine.match(previous: previous, current: candidate)
             let result = StepResult(frame: candidate, match: match)
 
@@ -348,8 +371,14 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
 
             // Undo the rejected step before retrying. Waiting for that rollback to
             // settle preserves the previous frame as the exact registration base.
-            try scrollDriver.scroll(verticalDelta: -delta, at: location)
+            guard try await driveSmoothScroll(
+                verticalDelta: -delta,
+                at: location
+            ) else {
+                return nil
+            }
             _ = try await captureSettledFrame()
+            if currentControl().shouldFinish { return nil }
             delta /= 2
         }
         if let best { return best }
@@ -357,6 +386,42 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
             frame: previous,
             match: try stitchEngine.match(previous: previous, current: previous)
         )
+    }
+
+    /// Delivers a logical scroll in several continuous pixel-wheel events.
+    /// Splitting the exact requested delta avoids a visible jump while keeping
+    /// capture/stitching deterministic: there is still one native frame taken
+    /// only after the entire logical step has settled.
+    private func driveSmoothScroll(
+        verticalDelta: Int,
+        at location: CGPoint
+    ) async throws -> Bool {
+        guard verticalDelta != 0 else { return true }
+
+        let magnitude = abs(verticalDelta)
+        let pulseLimit = max(1, autoConfiguration.maximumPulsePoints)
+        let pulseCount = 1 + (magnitude - 1) / pulseLimit
+        let basePulse = magnitude / pulseCount
+        let remainder = magnitude % pulseCount
+        let direction = verticalDelta < 0 ? -1 : 1
+
+        for index in 0..<pulseCount {
+            try Task.checkCancellation()
+            try await waitWhilePaused()
+            let control = currentControl()
+            if control.isCancelled { throw CancellationError() }
+            if control.shouldFinish { return false }
+
+            let pulse = basePulse + (index < remainder ? 1 : 0)
+            try scrollDriver.scroll(
+                verticalDelta: direction * pulse,
+                at: location
+            )
+            if index + 1 < pulseCount {
+                try await Task.sleep(for: autoConfiguration.pulseInterval)
+            }
+        }
+        return true
     }
 
     private func captureSettledFrame() async throws -> CGImage {

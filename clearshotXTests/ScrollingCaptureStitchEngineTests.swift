@@ -238,6 +238,51 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
         XCTAssertEqual(deltas[1], -deltas[0])
         XCTAssertEqual(deltas[2], deltas[0] / 2)
     }
+
+    func testAutoScrollBreaksAReadableStepIntoSmallContinuousPulses() async throws {
+        let document = stitchDocument(width: 180, height: 700)
+        let first = try stitchCrop(document, y: 0, height: 260)
+        let advanced = try stitchCrop(document, y: 61, height: 260)
+        let source = ScriptedDiscreteFrameSource(
+            frames: [first, advanced, advanced, advanced]
+        )
+        let driver = RecordingScrollDriver()
+        var autoConfiguration = ScrollingCaptureAutoCaptureConfiguration()
+        autoConfiguration.viewportStepFraction = 0.25 // 65 points for this viewport
+        autoConfiguration.maximumPulsePoints = 20
+        autoConfiguration.pulseInterval = .zero
+        autoConfiguration.readableStepPause = .zero
+        autoConfiguration.initialSettleDelay = .zero
+        autoConfiguration.settleProbeDelay = .zero
+        autoConfiguration.maximumSettleProbes = 0
+        autoConfiguration.stationaryStepsToFinish = 2
+        let controller = ScrollingCaptureAutoCaptureController(
+            frameSource: source,
+            scrollDriver: driver,
+            stitchEngine: ScrollingCaptureStitchEngine(configuration: stitchConfiguration()),
+            autoConfiguration: autoConfiguration
+        )
+        let completed = expectation(description: "Smooth automatic capture completed")
+
+        _ = try await controller.start(
+            selectedRegion: CGRect(x: 0, y: 0, width: 180, height: 260),
+            onProgress: { _ in },
+            onPreview: { _ in },
+            onCompletion: { result in
+                guard case .success = result else {
+                    XCTFail("Expected a completed capture")
+                    return completed.fulfill()
+                }
+                completed.fulfill()
+            }
+        )
+
+        await fulfillment(of: [completed], timeout: 2)
+        let firstStep = Array(driver.deltas.prefix(4))
+        XCTAssertEqual(firstStep.count, 4)
+        XCTAssertEqual(firstStep.reduce(0, +), 65)
+        XCTAssertTrue(firstStep.allSatisfy { $0 > 0 && $0 <= 20 })
+    }
 }
 
 private func makeAutoController(
@@ -248,6 +293,12 @@ private func makeAutoController(
     autoConfiguration.initialSettleDelay = .zero
     autoConfiguration.settleProbeDelay = .zero
     autoConfiguration.maximumSettleProbes = 0
+    // The existing capture-loop tests exercise registration behavior, not the
+    // user-facing pacing layer. One pulse keeps their scroll-event assertions
+    // focused and deterministic.
+    autoConfiguration.maximumPulsePoints = .max
+    autoConfiguration.pulseInterval = .zero
+    autoConfiguration.readableStepPause = .zero
     autoConfiguration.stationaryStepsToFinish = 2
     return ScrollingCaptureAutoCaptureController(
         frameSource: source,
