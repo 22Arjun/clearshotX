@@ -27,7 +27,6 @@ nonisolated final class ScrollingCaptureSession {
     }
 
     func ingest(_ frame: CGImage) throws -> ScrollingCaptureFrameDecision {
-        let initialPixelCount = frame.width.multipliedReportingOverflow(by: frame.height)
         let insetHeight = configuration.contentInsets.top.addingReportingOverflow(
             configuration.contentInsets.bottom
         )
@@ -42,9 +41,7 @@ nonisolated final class ScrollingCaptureSession {
               configuration.minimumOverlapFraction < 1,
               !insetHeight.overflow,
               insetHeight.partialValue < frame.height,
-              configuration.maximumOutputHeight >= frame.height,
-              !initialPixelCount.overflow,
-              configuration.maximumOutputPixelCount >= initialPixelCount.partialValue
+              configuration.permitsOutput(width: frame.width, height: frame.height)
         else {
             throw ScrollingCaptureError.invalidConfiguration
         }
@@ -148,11 +145,7 @@ nonisolated final class ScrollingCaptureSession {
         }
 
         let proposedHeight = compositor.outputHeight + alignment.verticalOffset
-        let proposedPixelCount = proposedHeight.multipliedReportingOverflow(by: frame.width)
-        guard proposedHeight <= configuration.maximumOutputHeight,
-              !proposedPixelCount.overflow,
-              proposedPixelCount.partialValue <= configuration.maximumOutputPixelCount
-        else {
+        guard configuration.permitsOutput(width: frame.width, height: proposedHeight) else {
             continuityValidator.discardCandidate()
             analyzer.discardCandidate()
             return .reachedOutputLimit(progress())

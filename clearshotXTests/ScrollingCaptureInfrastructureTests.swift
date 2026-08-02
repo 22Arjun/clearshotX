@@ -139,6 +139,35 @@ final class ScrollingCaptureSessionTests: XCTestCase {
         XCTAssertEqual(try session.finish().height, 100)
     }
 
+    func testDefaultConfigurationDoesNotRejectLegacyPixelCap() {
+        XCTAssertTrue(
+            ScrollingCaptureConfiguration().permitsOutput(width: 2_000, height: 50_000)
+        )
+    }
+
+    func testDefaultSessionDoesNotStopAtLegacyHeightLimit() throws {
+        let document = makeDocument(width: 64, height: 62_600)
+        let session = ScrollingCaptureSession(configuration: testConfiguration())
+        let viewportHeight = 1_200
+        let step = 600
+
+        _ = try session.ingest(crop(document, y: 0, height: viewportHeight))
+
+        var offset = step
+        while offset <= 60_000 {
+            let decision = try session.ingest(
+                crop(document, y: offset, height: viewportHeight)
+            )
+            guard case .appended = decision else {
+                return XCTFail("Expected append at offset \(offset), got \(decision)")
+            }
+            offset += step
+        }
+
+        let output = try session.finish()
+        XCTAssertGreaterThan(output.height, 60_000)
+    }
+
     func testSessionRejectsViewportResize() throws {
         let session = ScrollingCaptureSession(configuration: testConfiguration())
         _ = try session.ingest(makeDocument(width: 64, height: 100))

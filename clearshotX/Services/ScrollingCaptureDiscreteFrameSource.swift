@@ -200,6 +200,10 @@ nonisolated final class ScrollingCaptureContinuousDiscreteFrameSource:
 
     func stop() async {
         try? await continuousSource.stop()
+        clearFrames()
+    }
+
+    private func clearFrames() {
         lock.lock()
         latestFrame = nil
         latestSequence = 0

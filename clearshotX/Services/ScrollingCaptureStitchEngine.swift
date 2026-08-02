@@ -94,6 +94,41 @@ nonisolated final class ScrollingCaptureStitchEngine {
     ) throws -> ScrollingCaptureStitchMatch {
         try validate(previous: previous, current: current)
 
+        // Check the inexpensive, exact "nothing moved" case before asking the
+        // coarse matcher to infer an offset. At the end of a document a scroll
+        // event commonly produces the same viewport again. A coarse search over
+        // sparse/blank content can otherwise choose an arbitrary high offset
+        // and make the refinement range invalid, turning a normal page end into
+        // a capture failure.
+        guard let nativePrevious = NCCPlane(
+            image: previous,
+            maximumWidth: configuration.nativeRefinementWidth,
+            maximumHeight: previous.height
+        ), let nativeCurrent = NCCPlane(
+            image: current,
+            maximumWidth: configuration.nativeRefinementWidth,
+            maximumHeight: current.height
+        ) else {
+            throw ScrollingCaptureStitchError.imageConversionFailed
+        }
+
+        let explicitInsets = configuration.contentInsets
+        let initialZeroDifference = meanAbsoluteDifference(
+            previous: nativePrevious,
+            current: nativeCurrent,
+            offset: 0,
+            contentInsets: explicitInsets
+        )
+        if initialZeroDifference <= configuration.stationaryDifferenceThreshold {
+            return ScrollingCaptureStitchMatch(
+                verticalOffset: 0,
+                correlation: 1,
+                peakMargin: 1,
+                detectedContentInsets: explicitInsets,
+                disposition: .stationary
+            )
+        }
+
         guard let coarsePrevious = NCCPlane(
             image: previous,
             maximumWidth: configuration.maximumCoarseWidth,
@@ -130,25 +165,28 @@ nonisolated final class ScrollingCaptureStitchEngine {
         // Horizontal reduction is safe for registration, but every vertical row is
         // preserved here. This pass makes the returned offset exact on Retina and
         // on viewports taller than the broad analysis plane.
-        guard let nativePrevious = NCCPlane(
-            image: previous,
-            maximumWidth: configuration.nativeRefinementWidth,
-            maximumHeight: previous.height
-        ), let nativeCurrent = NCCPlane(
-            image: current,
-            maximumWidth: configuration.nativeRefinementWidth,
-            maximumHeight: current.height
-        ) else {
-            throw ScrollingCaptureStitchError.imageConversionFailed
-        }
-
-        let explicitInsets = configuration.contentInsets
         var nativeSearch = try refinedSearch(
             previous: nativePrevious,
             current: nativeCurrent,
             around: proposedNativeOffset,
             contentInsets: explicitInsets
         )
+
+        // A partly-consumed final scroll can leave very little distinctive
+        // content in the coarse plane. If its proposed offset does not form a
+        // credible native match, search the bounded native range rather than
+        // rejecting a perfectly stitchable final strip.
+        var usedFullNativeSearch = false
+        if !hasReliablePeak(nativeSearch, coarseSearch: coarseSearch) {
+            nativeSearch = try search(
+                previous: nativePrevious,
+                current: nativeCurrent,
+                contentInsets: explicitInsets,
+                preferredBandHeight: configuration.nativeRefinementBandHeight,
+                offsets: nil
+            )
+            usedFullNativeSearch = true
+        }
 
         var detectedInsets = explicitInsets
         if nativeSearch.best.offset > configuration.zeroOffsetTolerance {
@@ -182,7 +220,11 @@ nonisolated final class ScrollingCaptureStitchEngine {
 
         let nativeMargin = peakMargin(in: nativeSearch)
         let coarseMargin = peakMargin(in: coarseSearch)
-        let margin = min(nativeMargin, coarseMargin)
+        // Once the bounded full native search has taken over, its exact-pixel
+        // peak is the authority. The original coarse peak was specifically
+        // rejected as ambiguous, so continuing to gate on it would discard the
+        // valid final strip that the native search recovered.
+        let margin = usedFullNativeSearch ? nativeMargin : min(nativeMargin, coarseMargin)
         let hasReliablePeak = nativeSearch.best.correlation
                 >= configuration.correlationThreshold
             && margin >= configuration.minimumPeakMargin
@@ -263,11 +305,13 @@ nonisolated final class ScrollingCaptureStitchEngine {
             throw ScrollingCaptureStitchError.insufficientOverlap
         }
         let maximumOffset = maximumOffset(for: contentHeight)
-        let lower = max(0, proposedOffset - configuration.nativeRefinementRadius)
-        let upper = min(maximumOffset, proposedOffset + configuration.nativeRefinementRadius)
-        guard lower <= upper else {
-            throw ScrollingCaptureStitchError.insufficientOverlap
-        }
+        // Coarse planes are downscaled independently. Their rounded estimate can
+        // land just outside the native legal range, especially at a page end.
+        // Clamp it instead of treating that ordinary rounding/sparsity condition
+        // as an impossible overlap error.
+        let clampedOffset = min(maximumOffset, max(0, proposedOffset))
+        let lower = max(0, clampedOffset - configuration.nativeRefinementRadius)
+        let upper = min(maximumOffset, clampedOffset + configuration.nativeRefinementRadius)
         return try search(
             previous: previous,
             current: current,
@@ -344,6 +388,17 @@ nonisolated final class ScrollingCaptureStitchEngine {
             .map(\.correlation)
             .max() ?? -1
         return max(0, result.best.correlation - second)
+    }
+
+    private func hasReliablePeak(
+        _ nativeResult: SearchResult,
+        coarseSearch: SearchResult
+    ) -> Bool {
+        nativeResult.best.correlation >= configuration.correlationThreshold
+            && min(
+                peakMargin(in: nativeResult),
+                peakMargin(in: coarseSearch)
+            ) >= configuration.minimumPeakMargin
     }
 
     private struct CorrelationSample {

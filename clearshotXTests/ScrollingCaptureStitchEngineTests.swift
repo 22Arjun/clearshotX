@@ -56,6 +56,25 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
         XCTAssertTrue(match.isReliable)
     }
 
+    func testStationaryEndFrameCompletesWithoutDependingOnCoarseOverlapSearch() throws {
+        let frame = try stitchCrop(
+            sparseStitchDocument(width: 180, height: 420),
+            y: 50,
+            height: 260
+        )
+        var configuration = stitchConfiguration()
+        // Deliberately too little coarse vertical information to register a
+        // sparse page reliably. A real page end must still be recognized as a
+        // normal stationary completion rather than an overlap failure.
+        configuration.maximumCoarseHeight = 2
+        let engine = ScrollingCaptureStitchEngine(configuration: configuration)
+
+        let match = try engine.match(previous: frame, current: frame)
+
+        XCTAssertEqual(match.disposition, .stationary)
+        XCTAssertEqual(match.verticalOffset, 0)
+    }
+
     func testUnrelatedFramesRequestSmallerDeltaInsteadOfInventingReliableOffset() throws {
         let previous = stitchImage(width: 180, height: 260) { x, y in
             UInt8((x &* 17 &+ y &* 43 &+ (x * y) % 97) % 256)

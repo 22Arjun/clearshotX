@@ -47,10 +47,25 @@ nonisolated struct ScrollingCaptureConfiguration: Equatable, Sendable {
     /// Automatic fixed-band detection will populate this in a later pipeline stage.
     var contentInsets: ScrollingCaptureContentInsets = .zero
 
-    /// Guardrails prevent a malicious or accidental endless session from exhausting
-    /// address space while still allowing very long captures.
-    var maximumOutputHeight = 60_000
-    var maximumOutputPixelCount = 80_000_000
+    /// Optional guardrails for tests or future preferences. The shipped default is
+    /// intentionally uncapped so users can keep capturing until they stop, the page
+    /// ends, or the system can no longer allocate/encode the final image.
+    var maximumOutputHeight: Int?
+    var maximumOutputPixelCount: Int?
+
+    func permitsOutput(width: Int, height: Int) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        if let maximumOutputHeight, height > maximumOutputHeight {
+            return false
+        }
+        let pixelCount = width.multipliedReportingOverflow(by: height)
+        guard !pixelCount.overflow else { return false }
+        if let maximumOutputPixelCount,
+           pixelCount.partialValue > maximumOutputPixelCount {
+            return false
+        }
+        return true
+    }
 }
 
 nonisolated struct ScrollingCaptureAlignment: Equatable, Sendable {

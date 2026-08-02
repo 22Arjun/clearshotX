@@ -16,7 +16,12 @@ nonisolated struct ScrollingCaptureAutoCaptureConfiguration: Equatable, Sendable
     var settleProbeDelay: Duration = .milliseconds(18)
     var maximumSettleProbes = 5
     var stationaryStepsToFinish = 2
-    var maximumSteps = 1_000
+    var maximumSteps: Int?
+
+    func canRunStep(_ completedStepCount: Int) -> Bool {
+        guard let maximumSteps else { return true }
+        return completedStepCount < maximumSteps
+    }
 }
 
 nonisolated enum ScrollingCaptureAutoCaptureError: LocalizedError, Equatable {
@@ -228,7 +233,7 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
         var stationaryCount = 0
         var steps = 0
 
-        captureLoop: while steps < autoConfiguration.maximumSteps {
+        captureLoop: while autoConfiguration.canRunStep(steps) {
             try Task.checkCancellation()
             try await waitWhilePaused()
             let state = currentControl()
@@ -267,12 +272,10 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
                     )
                 }
                 let proposedHeight = compositor.outputHeight + step.match.verticalOffset
-                let pixels = compositor.outputWidth.multipliedReportingOverflow(
-                    by: proposedHeight
-                )
-                guard proposedHeight <= captureConfiguration.maximumOutputHeight,
-                      !pixels.overflow,
-                      pixels.partialValue <= captureConfiguration.maximumOutputPixelCount else {
+                guard captureConfiguration.permitsOutput(
+                    width: compositor.outputWidth,
+                    height: proposedHeight
+                ) else {
                     progress = makeProgress(
                         compositor: compositor,
                         acceptedFrames: acceptedFrames,
