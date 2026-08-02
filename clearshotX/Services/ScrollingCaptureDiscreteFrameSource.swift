@@ -58,6 +58,9 @@ nonisolated final class ScrollingCaptureDiscreteFrameSource:
         filter.includeMenuBar = true
 
         let configuration = SCStreamConfiguration()
+        // This configuration is the source-of-truth for final output quality.
+        // The small side HUD receives a separately built thumbnail later; it can
+        // never influence this native-pixel capture stream.
         configuration.sourceRect = geometry.sourceRect
         configuration.width = geometry.pixelWidth
         configuration.height = geometry.pixelHeight

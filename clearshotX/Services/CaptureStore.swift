@@ -56,6 +56,29 @@ enum CaptureStoreError: LocalizedError {
     }
 }
 
+/// The save boundary for every screenshot. It receives a full-size `CGImage`
+/// directly — never an `NSImage`, HUD thumbnail, or compressed intermediary —
+/// and writes a PNG through ImageIO. PNG encoding is lossless, so output pixels
+/// and native dimensions are preserved exactly while data is streamed to disk.
+nonisolated enum CapturePNGEncoder {
+    static func write(_ image: CGImage, to url: URL) throws {
+        guard image.width > 0, image.height > 0,
+              let destination = CGImageDestinationCreateWithURL(
+                url as CFURL,
+                UTType.png.identifier as CFString,
+                1,
+                nil
+              ) else {
+            throw CaptureStoreError.destinationCreationFailed
+        }
+
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw CaptureStoreError.imageEncodingFailed
+        }
+    }
+}
+
 final class CaptureStore: CaptureStoring {
     private let fileManager: FileManager
     private let preferences: CaptureSavePreferences
@@ -97,20 +120,7 @@ final class CaptureStore: CaptureStoring {
                     try? fileManager.removeItem(at: stagingURL)
                 }
 
-                guard let destination = CGImageDestinationCreateWithURL(
-                    stagingURL as CFURL,
-                    UTType.png.identifier as CFString,
-                    1,
-                    nil
-                ) else {
-                    throw CaptureStoreError.destinationCreationFailed
-                }
-
-                CGImageDestinationAddImage(destination, image, nil)
-
-                guard CGImageDestinationFinalize(destination) else {
-                    throw CaptureStoreError.imageEncodingFailed
-                }
+                try CapturePNGEncoder.write(image, to: stagingURL)
 
                 try fileManager.moveItem(at: stagingURL, to: fileURL)
                 let dragFileURL = try makeDragFile(for: fileURL, image: image)
@@ -266,19 +276,7 @@ final class CaptureStore: CaptureStoring {
                 do {
                     try fileManager.copyItem(at: sourceURL, to: dragFileURL)
                 } catch {
-                    guard let destination = CGImageDestinationCreateWithURL(
-                        dragFileURL as CFURL,
-                        UTType.png.identifier as CFString,
-                        1,
-                        nil
-                    ) else {
-                        throw CaptureStoreError.destinationCreationFailed
-                    }
-
-                    CGImageDestinationAddImage(destination, image, nil)
-                    guard CGImageDestinationFinalize(destination) else {
-                        throw CaptureStoreError.imageEncodingFailed
-                    }
+                    try CapturePNGEncoder.write(image, to: dragFileURL)
                 }
             }
 

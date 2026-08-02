@@ -1,4 +1,5 @@
 import CoreGraphics
+import ImageIO
 import XCTest
 
 @testable import clearshotX
@@ -180,6 +181,25 @@ final class ScrollingCaptureSessionTests: XCTestCase {
     }
 }
 
+final class CapturePNGEncoderTests: XCTestCase {
+    func testLosslessEncoderPreservesNativePixelsAndDimensions() throws {
+        let source = rgbaImage(width: 137, height: 91) { x, y in
+            UInt8((x * 29 + y * 47 + (x * y) % 113) % 256)
+        }
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clearshotx-lossless-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+
+        try CapturePNGEncoder.write(source, to: outputURL)
+
+        let imageSource = try XCTUnwrap(CGImageSourceCreateWithURL(outputURL as CFURL, nil))
+        let decoded = try XCTUnwrap(CGImageSourceCreateImageAtIndex(imageSource, 0, nil))
+        XCTAssertEqual(decoded.width, source.width)
+        XCTAssertEqual(decoded.height, source.height)
+        XCTAssertEqual(rgbaBytes(decoded), rgbaBytes(source))
+    }
+}
+
 private func testConfiguration() -> ScrollingCaptureConfiguration {
     var configuration = ScrollingCaptureConfiguration()
     configuration.maximumAnalysisWidth = 128
@@ -275,6 +295,24 @@ private func grayscalePixels(_ image: CGImage) -> [UInt8] {
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
     }
     return pixels
+}
+
+private func rgbaBytes(_ image: CGImage) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+    bytes.withUnsafeMutableBytes { buffer in
+        let context = CGContext(
+            data: buffer.baseAddress,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: image.width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+    }
+    return bytes
 }
 
 private func meanPixelDifference(_ lhs: CGImage, _ rhs: CGImage) -> Double {
