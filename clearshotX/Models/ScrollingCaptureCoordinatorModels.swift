@@ -73,7 +73,7 @@ struct ScrollingCaptureHUDState: Equatable {
         case .starting:
             "Connecting to the selected area"
         case .ready:
-            "Press Start Capture, then scroll naturally. You can switch to Auto Scroll before you start scrolling."
+            "Press Start Capture to begin scrolling capture."
         case .capturing:
             switch mode {
             case .manual:
@@ -119,7 +119,13 @@ struct ScrollingCaptureHUDState: Equatable {
     /// existing manual progress to hand off, and starting automatic capture
     /// over would silently discard it.
     var canSwitchToAutoScroll: Bool {
-        mode == .manual && acceptedFrameCount <= 1 && (phase == .capturing || phase == .guidance)
+        // The moment manual movement is observed — whether it stitched cleanly
+        // or needs a retry — the capture has a real history. Auto Scroll must
+        // no longer be offered because switching would discard that history.
+        mode == .manual
+            && acceptedFrameCount <= 1
+            && rejectedFrameCount == 0
+            && (phase == .capturing || phase == .guidance)
     }
 
     var canPause: Bool {

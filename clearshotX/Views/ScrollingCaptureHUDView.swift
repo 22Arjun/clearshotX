@@ -28,20 +28,6 @@ struct ScrollingCaptureControlsView: View {
                 }
                 .buttonStyle(ScrollingCapturePillButtonStyle(emphasized: false))
 
-                Button {
-                    viewModel.togglePause()
-                } label: {
-                    Image(
-                        systemName: viewModel.state.pauseButtonTitle == "Resume"
-                            ? "play.fill"
-                            : "pause.fill"
-                    )
-                    .frame(width: 12, height: 12)
-                }
-                .buttonStyle(ScrollingCapturePillButtonStyle(emphasized: false))
-                .disabled(!viewModel.state.canPause)
-                .help(viewModel.state.pauseButtonTitle)
-
                 if viewModel.state.canSwitchToAutoScroll {
                     Button {
                         viewModel.switchToAutoScroll()
@@ -55,7 +41,7 @@ struct ScrollingCaptureControlsView: View {
                 Button {
                     viewModel.finish()
                 } label: {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label("Done", systemImage: "checkmark")
                 }
                 .buttonStyle(ScrollingCapturePillButtonStyle(emphasized: true))
                 .disabled(!viewModel.state.canFinish)

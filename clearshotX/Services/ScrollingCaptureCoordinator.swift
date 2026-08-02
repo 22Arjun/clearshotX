@@ -107,13 +107,6 @@ final class ScrollingCaptureCoordinator {
         hudPresenter.show(viewModel: hudViewModel, adjacentTo: selectedRegion)
 
         do {
-            if autoCapture != nil {
-                phase = .ready
-                hudState.phase = .ready
-                hudViewModel.update(hudState)
-                return
-            }
-
             try await beginManualCapture(
                 selectedRegion: selectedRegion,
                 captureID: captureID

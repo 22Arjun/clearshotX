@@ -39,7 +39,11 @@ final class ScrollingCaptureHUDViewModel: ObservableObject {
         // Control availability and phase transitions must feel immediate. Numeric
         // progress can be coalesced: publishing it for every 30 fps stream sample
         // only makes SwiftUI redo work that is invisible between display frames.
-        if state.phase != self.state.phase || state.canFinish != self.state.canFinish {
+        if state.phase != self.state.phase
+            || state.canFinish != self.state.canFinish
+            || state.canStartCapture != self.state.canStartCapture
+            || state.canSwitchToAutoScroll != self.state.canSwitchToAutoScroll
+        {
             statePublicationTask?.cancel()
             statePublicationTask = nil
             pendingState = nil

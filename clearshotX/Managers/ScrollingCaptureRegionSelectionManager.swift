@@ -407,7 +407,6 @@ private final class ScrollingRegionSelectionView: NSView {
     private var pressedControl: Control?
 
     private enum Control {
-        case cancel
         case start
     }
 
@@ -472,8 +471,6 @@ private final class ScrollingRegionSelectionView: NSView {
             needsDisplay = true
             guard control(at: point) == pressedControl else { return }
             switch pressedControl {
-            case .cancel:
-                onCancel?()
             case .start:
                 confirm()
             }
@@ -600,18 +597,11 @@ private final class ScrollingRegionSelectionView: NSView {
         guard screenFrame.contains(CGPoint(x: selectionRect.midX, y: selectionRect.minY)) else {
             return
         }
-        let rects = controlRects(for: selectionRect)
-        drawPill(
-            title: "Cancel",
-            symbol: "xmark",
-            rect: localRect(for: rects.cancel),
-            emphasized: false,
-            pressed: pressedControl == .cancel
-        )
+        let startRect = controlRect(for: selectionRect)
         drawPill(
             title: "Start Capture",
             symbol: "checkmark",
-            rect: localRect(for: rects.start),
+            rect: localRect(for: startRect),
             emphasized: true,
             pressed: pressedControl == .start
         )
@@ -676,28 +666,20 @@ private final class ScrollingRegionSelectionView: NSView {
         else {
             return nil
         }
-        let rects = controlRects(for: selectionRect)
-        if rects.cancel.contains(point) { return .cancel }
-        if rects.start.contains(point) { return .start }
+        if controlRect(for: selectionRect).contains(point) { return .start }
         return nil
     }
 
-    private func controlRects(for selectionRect: CGRect) -> (cancel: CGRect, start: CGRect) {
-        let gap: CGFloat = 8
-        let cancelWidth: CGFloat = 92
+    private func controlRect(for selectionRect: CGRect) -> CGRect {
         let startWidth: CGFloat = 132
         let height: CGFloat = 36
-        let totalWidth = cancelWidth + gap + startWidth
-        let proposedX = selectionRect.midX - totalWidth / 2
+        let proposedX = selectionRect.midX - startWidth / 2
         let x = min(
             max(proposedX, screenFrame.minX + 10),
-            screenFrame.maxX - totalWidth - 10
+            screenFrame.maxX - startWidth - 10
         )
         let y = max(screenFrame.minY + 10, selectionRect.minY + 10)
-        return (
-            CGRect(x: x, y: y, width: cancelWidth, height: height),
-            CGRect(x: x + cancelWidth + gap, y: y, width: startWidth, height: height)
-        )
+        return CGRect(x: x, y: y, width: startWidth, height: height)
     }
 
     private func updateCursor(at point: CGPoint) {

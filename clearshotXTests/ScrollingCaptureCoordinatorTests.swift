@@ -5,6 +5,37 @@ import XCTest
 @testable import clearshotX
 
 final class ScrollingCaptureHUDReducerTests: XCTestCase {
+    func testAutoScrollBecomesUnavailableAsSoonAsManualMovementIsObserved() {
+        var state = ScrollingCaptureHUDState(
+            phase: .capturing,
+            acceptedFrameCount: 1,
+            rejectedFrameCount: 0,
+            outputPixelWidth: 600,
+            outputPixelHeight: 400,
+            mode: .manual
+        )
+        var consecutiveRejections = 0
+
+        XCTAssertTrue(state.canSwitchToAutoScroll)
+
+        state = ScrollingCaptureHUDReducer.applying(
+            .rejected(
+                .insufficientOverlap,
+                ScrollingCaptureProgress(
+                    acceptedFrameCount: 1,
+                    rejectedFrameCount: 1,
+                    outputPixelWidth: 600,
+                    outputPixelHeight: 400,
+                    lastAlignment: nil
+                )
+            ),
+            to: state,
+            consecutiveRejections: &consecutiveRejections
+        )
+
+        XCTAssertFalse(state.canSwitchToAutoScroll)
+    }
+
     func testShowsGuidanceOnlyAfterARejectionStreakAndRecoversOnAppend() {
         var state = ScrollingCaptureHUDState.starting
         var consecutiveRejections = 0
@@ -191,7 +222,7 @@ final class ScrollingCapturePreviewBuilderTests: XCTestCase {
 
 @MainActor
 final class ScrollingCaptureCoordinatorTests: XCTestCase {
-    func testStartCaptureWaitsForExplicitButtonThenAllowsSwitchingToAutoScroll() async throws {
+    func testStartCaptureBeginsManualCaptureThenAllowsSwitchingToAutoScroll() async throws {
         let source = FakeScrollingFrameSource()
         let autoCapture = FakeAutoCapture()
         let hud = FakeScrollingHUDPresenter()
@@ -218,19 +249,15 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
             completed.fulfill()
         }
 
-        XCTAssertEqual(coordinator.phase, .ready)
-        XCTAssertEqual(hud.viewModel?.state.phase, .ready)
-        XCTAssertTrue(hud.viewModel?.state.canStartCapture ?? false)
-        XCTAssertEqual(source.startCount, 0)
+        await fulfillment(of: [manualStarted], timeout: 2)
+        XCTAssertEqual(coordinator.phase, .capturing)
+        XCTAssertEqual(hud.viewModel?.state.phase, .capturing)
+        XCTAssertFalse(hud.viewModel?.state.canStartCapture ?? true)
+        XCTAssertEqual(source.startCount, 1)
         XCTAssertEqual(autoCapture.startCount, 0)
 
-        // Pressing Start Capture begins manual scrolling immediately; there is
-        // no separate up-front mode choice any more.
-        hud.viewModel?.startCapture()
-        await fulfillment(of: [manualStarted], timeout: 2)
-        await Task.yield()
-
-        XCTAssertEqual(coordinator.phase, .capturing)
+        // The selection-frame Start Capture action has already begun manual
+        // capture. Auto Scroll remains available until real scrolling starts.
         XCTAssertEqual(hud.viewModel?.state.mode, .manual)
         XCTAssertTrue(hud.viewModel?.state.canSwitchToAutoScroll ?? false)
 
@@ -251,9 +278,11 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
     }
 
     func testCancelBeforeAutoScrollStartsDismissesWithoutStartingCapture() async throws {
+        let source = FakeScrollingFrameSource()
         let autoCapture = FakeAutoCapture()
         let hud = FakeScrollingHUDPresenter()
         let coordinator = ScrollingCaptureCoordinator(
+            frameSource: source,
             autoCapture: autoCapture,
             captureStore: FakeCaptureStore(),
             hudPresenter: hud,
@@ -271,11 +300,13 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
             completed.fulfill()
         }
 
+        XCTAssertEqual(source.startCount, 1)
         hud.viewModel?.cancel()
         await fulfillment(of: [completed], timeout: 2)
 
         XCTAssertNil(receivedCapture)
         XCTAssertEqual(autoCapture.startCount, 0)
+        XCTAssertEqual(source.stopCount, 1)
         XCTAssertEqual(hud.dismissCount, 1)
         XCTAssertEqual(coordinator.phase, .idle)
     }
@@ -306,16 +337,10 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
             completed.fulfill()
         }
 
-        XCTAssertEqual(coordinator.phase, .ready)
-        XCTAssertEqual(source.startCount, 0)
-        XCTAssertEqual(autoCapture.startCount, 0)
-
-        hud.viewModel?.startCapture()
-        await fulfillment(of: [started], timeout: 2)
-        await Task.yield()
-
         XCTAssertEqual(coordinator.phase, .capturing)
         XCTAssertEqual(source.startCount, 1)
+        XCTAssertEqual(autoCapture.startCount, 0)
+        await fulfillment(of: [started], timeout: 2)
         XCTAssertEqual(autoCapture.startCount, 0)
 
         source.emit(image: makeSolidImage(width: 4, height: 3))
@@ -361,13 +386,9 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
             completed.fulfill()
         }
 
-        XCTAssertEqual(coordinator.phase, .ready)
-        XCTAssertEqual(autoCapture.startCount, 0)
-
-        hud.viewModel?.startCapture()
-        await fulfillment(of: [manualStarted], timeout: 2)
-        await Task.yield()
         XCTAssertEqual(coordinator.phase, .capturing)
+        XCTAssertEqual(autoCapture.startCount, 0)
+        await fulfillment(of: [manualStarted], timeout: 2)
 
         hud.viewModel?.switchToAutoScroll()
         await fulfillment(of: [completed], timeout: 2)
@@ -478,9 +499,7 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         autoCapture.onStart = { autoStarted.fulfill() }
 
         try await coordinator.start(selectedRegion: region) { _ in }
-        hud.viewModel?.startCapture()
         await fulfillment(of: [manualStarted], timeout: 2)
-        await Task.yield()
         hud.viewModel?.switchToAutoScroll()
         await fulfillment(of: [autoStarted], timeout: 2)
         await Task.yield()
@@ -527,9 +546,7 @@ final class ScrollingCaptureCoordinatorTests: XCTestCase {
         autoCapture.onStart = { autoStarted.fulfill() }
 
         try await coordinator.start(selectedRegion: region) { _ in }
-        hud.viewModel?.startCapture()
         await fulfillment(of: [manualStarted], timeout: 2)
-        await Task.yield()
         hud.viewModel?.switchToAutoScroll()
         await fulfillment(of: [autoStarted], timeout: 2)
         await Task.yield()
