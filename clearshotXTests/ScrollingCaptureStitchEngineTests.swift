@@ -40,6 +40,24 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
         XCTAssertEqual(match.disposition, .accept)
     }
 
+    func testWideViewportRetainsEnoughHorizontalEvidenceForReliableAlignment() throws {
+        let document = stitchDocument(width: 1_920, height: 1_120)
+        let previous = try stitchCrop(document, y: 48, height: 520)
+        let current = try stitchCrop(document, y: 174, height: 520)
+        var configuration = stitchConfiguration()
+        configuration.maximumCoarseWidth = 96
+        configuration.nativeRefinementWidth = 96
+        configuration.maximumWideCoarseWidth = 384
+        configuration.maximumWideNativeRefinementWidth = 320
+        let engine = ScrollingCaptureStitchEngine(configuration: configuration)
+
+        let match = try engine.match(previous: previous, current: current)
+
+        XCTAssertEqual(match.verticalOffset, 126)
+        XCTAssertEqual(match.disposition, .accept)
+        XCTAssertGreaterThan(match.correlation, 0.98)
+    }
+
     func testIdenticalFramesProduceReliableStationaryCandidate() throws {
         let frame = try stitchCrop(
             stitchDocument(width: 180, height: 420),
@@ -204,7 +222,7 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
         XCTAssertEqual(source.stopCount, 1)
     }
 
-    func testAutoLoopRollsBackLowConfidenceStepThenRetriesAtHalfDelta() async throws {
+    func testAutoLoopResamplesLowConfidenceFrameWithoutReverseScrolling() async throws {
         let document = stitchDocument(width: 180, height: 700)
         let first = try stitchCrop(document, y: 0, height: 260)
         let unrelated = stitchImage(width: 180, height: 260) { x, y in
@@ -216,7 +234,7 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
         )
         let driver = RecordingScrollDriver()
         let controller = makeAutoController(source: source, driver: driver)
-        let completed = expectation(description: "Retry completed")
+        let completed = expectation(description: "In-place recovery completed")
 
         _ = try await controller.start(
             selectedRegion: CGRect(x: 0, y: 0, width: 180, height: 260),
@@ -224,7 +242,7 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
             onPreview: { _ in },
             onCompletion: { result in
                 guard case let .success(image?) = result else {
-                    XCTFail("Expected retry to recover")
+                    XCTFail("Expected in-place recovery to complete")
                     return completed.fulfill()
                 }
                 XCTAssertEqual(image.height, 321)
@@ -234,9 +252,42 @@ final class ScrollingCaptureStitchEngineTests: XCTestCase {
 
         await fulfillment(of: [completed], timeout: 2)
         let deltas = driver.deltas
-        XCTAssertGreaterThanOrEqual(deltas.count, 5)
-        XCTAssertEqual(deltas[1], -deltas[0])
-        XCTAssertEqual(deltas[2], deltas[0] / 2)
+        XCTAssertGreaterThanOrEqual(deltas.count, 4)
+        XCTAssertTrue(deltas.allSatisfy { $0 > 0 })
+    }
+
+    func testAutoLoopFinishesVerifiedPrefixWhenViewportNeverRegisters() async throws {
+        let first = try stitchCrop(
+            stitchDocument(width: 180, height: 700),
+            y: 0,
+            height: 260
+        )
+        let unrelated = stitchImage(width: 180, height: 260) { x, y in
+            UInt8((x &* 71 &+ y &* 13 &+ ((x + 9) * (y + 3)) % 193) % 256)
+        }
+        let source = ScriptedDiscreteFrameSource(frames: [first, unrelated])
+        let driver = RecordingScrollDriver()
+        let controller = makeAutoController(source: source, driver: driver)
+        let completed = expectation(description: "Verified prefix completed")
+
+        _ = try await controller.start(
+            selectedRegion: CGRect(x: 0, y: 0, width: 180, height: 260),
+            onProgress: { _ in },
+            onPreview: { _ in },
+            onCompletion: { result in
+                guard case let .success(image?) = result else {
+                    XCTFail("Expected a safe partial capture, not an error")
+                    return completed.fulfill()
+                }
+                XCTAssertEqual(image.width, 180)
+                XCTAssertEqual(image.height, 260)
+                completed.fulfill()
+            }
+        )
+
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertEqual(driver.deltas.count, 1)
+        XCTAssertTrue(driver.deltas.allSatisfy { $0 > 0 })
     }
 
     func testAutoScrollBreaksAReadableStepIntoSmallContinuousPulses() async throws {
@@ -292,6 +343,7 @@ private func makeAutoController(
     var autoConfiguration = ScrollingCaptureAutoCaptureConfiguration()
     autoConfiguration.initialSettleDelay = .zero
     autoConfiguration.settleProbeDelay = .zero
+    autoConfiguration.alignmentRecoveryDelay = .zero
     autoConfiguration.maximumSettleProbes = 0
     // The existing capture-loop tests exercise registration behavior, not the
     // user-facing pacing layer. One pulse keeps their scroll-event assertions

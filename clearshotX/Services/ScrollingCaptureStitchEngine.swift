@@ -13,6 +13,12 @@ nonisolated struct ScrollingCaptureStitchConfiguration: Equatable, Sendable {
     var maximumCoarseWidth = 256
     var maximumCoarseHeight = 640
     var nativeRefinementWidth = 192
+    /// Wide browser/app viewports need more horizontal samples than a narrow
+    /// column. These ceilings preserve text and image detail for matching while
+    /// still bounding the Accelerate work on an ultra-wide selection.
+    var maximumWideCoarseWidth = 512
+    var maximumWideNativeRefinementWidth = 384
+    var wideRegionAspectRatio = 1.35
     var preferredCorrelationBandHeight = 180
     var nativeRefinementBandHeight = 320
     var nativeRefinementRadius = 8
@@ -102,11 +108,19 @@ nonisolated final class ScrollingCaptureStitchEngine {
         // a capture failure.
         guard let nativePrevious = NCCPlane(
             image: previous,
-            maximumWidth: configuration.nativeRefinementWidth,
+            maximumWidth: analysisWidth(
+                for: previous,
+                baseWidth: configuration.nativeRefinementWidth,
+                wideWidth: configuration.maximumWideNativeRefinementWidth
+            ),
             maximumHeight: previous.height
         ), let nativeCurrent = NCCPlane(
             image: current,
-            maximumWidth: configuration.nativeRefinementWidth,
+            maximumWidth: analysisWidth(
+                for: current,
+                baseWidth: configuration.nativeRefinementWidth,
+                wideWidth: configuration.maximumWideNativeRefinementWidth
+            ),
             maximumHeight: current.height
         ) else {
             throw ScrollingCaptureStitchError.imageConversionFailed
@@ -131,11 +145,19 @@ nonisolated final class ScrollingCaptureStitchEngine {
 
         guard let coarsePrevious = NCCPlane(
             image: previous,
-            maximumWidth: configuration.maximumCoarseWidth,
+            maximumWidth: analysisWidth(
+                for: previous,
+                baseWidth: configuration.maximumCoarseWidth,
+                wideWidth: configuration.maximumWideCoarseWidth
+            ),
             maximumHeight: configuration.maximumCoarseHeight
         ), let coarseCurrent = NCCPlane(
             image: current,
-            maximumWidth: configuration.maximumCoarseWidth,
+            maximumWidth: analysisWidth(
+                for: current,
+                baseWidth: configuration.maximumCoarseWidth,
+                wideWidth: configuration.maximumWideCoarseWidth
+            ),
             maximumHeight: configuration.maximumCoarseHeight
         ) else {
             throw ScrollingCaptureStitchError.imageConversionFailed
@@ -251,6 +273,10 @@ nonisolated final class ScrollingCaptureStitchEngine {
         guard configuration.maximumCoarseWidth > 0,
               configuration.maximumCoarseHeight > 0,
               configuration.nativeRefinementWidth > 0,
+              configuration.maximumWideCoarseWidth >= configuration.maximumCoarseWidth,
+              configuration.maximumWideNativeRefinementWidth
+                >= configuration.nativeRefinementWidth,
+              configuration.wideRegionAspectRatio > 1,
               configuration.preferredCorrelationBandHeight > 0,
               configuration.nativeRefinementBandHeight > 0,
               configuration.nativeRefinementRadius >= 0,
@@ -282,6 +308,26 @@ nonisolated final class ScrollingCaptureStitchEngine {
         guard insets.top + insets.bottom < previous.height else {
             throw ScrollingCaptureStitchError.invalidConfiguration
         }
+    }
+
+    /// Horizontally compressing a wide selection to the narrow-column sample
+    /// count erases the very text/image edges that disambiguate nearby vertical
+    /// offsets. Scale sample width with the viewport aspect ratio, but clamp it
+    /// to a configuration ceiling so matching remains predictably fast.
+    private func analysisWidth(
+        for image: CGImage,
+        baseWidth: Int,
+        wideWidth: Int
+    ) -> Int {
+        let aspectRatio = Double(image.width) / Double(max(1, image.height))
+        guard aspectRatio > configuration.wideRegionAspectRatio else {
+            return baseWidth
+        }
+        let multiplier = min(
+            Double(wideWidth) / Double(baseWidth),
+            aspectRatio / configuration.wideRegionAspectRatio
+        )
+        return min(wideWidth, max(baseWidth, Int((Double(baseWidth) * multiplier).rounded())))
     }
 
     private struct Candidate {

@@ -29,8 +29,6 @@ final class ScrollingCaptureCoordinator {
     private let hudPresenter: ScrollingCaptureHUDPresenting
     private let configuration: ScrollingCaptureConfiguration
     private let postEventAccessProvider: () -> Bool
-    private let mouseLocationProvider: () -> CGPoint
-    private let hoverPollInterval: Duration
 
     private var activeCaptureID: UUID?
     private var selectedRegion: CGRect?
@@ -42,14 +40,11 @@ final class ScrollingCaptureCoordinator {
     private var hudState: ScrollingCaptureHUDState = .starting
     private var consecutiveRejections = 0
 
-    // Automatic-mode hover gating: scrolling only actually advances while the
-    // cursor is over the selected area. `isUserPausedAuto` tracks the explicit
-    // Pause button independently of hover, since leaving the area must never
-    // silently clear a pause the user asked for, and moving back in must never
-    // silently resume one they didn't.
-    private var hoverMonitorTask: Task<Void, Never>?
+    // This is intentionally an explicit user-controlled pause only. Pointer
+    // movement must never affect Auto Scroll: capture events are targeted at
+    // the selected region's center, and polling the cursor can interrupt a
+    // scroll pulse or make the capture feel laggy.
     private var isUserPausedAuto = false
-    private var isHoveringSelectedRegion = true
 
     init(
         frameSource: ScrollingCaptureFrameSourcing = ScrollingCaptureFrameSource(),
@@ -60,9 +55,7 @@ final class ScrollingCaptureCoordinator {
         configuration: ScrollingCaptureConfiguration = ScrollingCaptureConfiguration(),
         postEventAccessProvider: @escaping () -> Bool = {
             CGPreflightPostEventAccess() || CGRequestPostEventAccess()
-        },
-        mouseLocationProvider: @escaping () -> CGPoint = { NSEvent.mouseLocation },
-        hoverPollInterval: Duration = .milliseconds(80)
+        }
     ) {
         self.frameSource = frameSource
         self.autoCapture = usesAutomaticCapture
@@ -74,8 +67,6 @@ final class ScrollingCaptureCoordinator {
         self.hudPresenter = hudPresenter ?? ScrollingCaptureHUDManager()
         self.configuration = configuration
         self.postEventAccessProvider = postEventAccessProvider
-        self.mouseLocationProvider = mouseLocationProvider
-        self.hoverPollInterval = hoverPollInterval
     }
 
     func start(
@@ -221,7 +212,6 @@ final class ScrollingCaptureCoordinator {
                 self.phase = .capturing
                 self.hudState.phase = .capturing
                 self.hudViewModel?.update(self.hudState)
-                self.startHoverMonitor(selectedRegion: selectedRegion, captureID: captureID)
             } catch {
                 guard self.activeCaptureID == captureID else { return }
                 self.complete(.failure(error), captureID: captureID)
@@ -283,7 +273,6 @@ final class ScrollingCaptureCoordinator {
             return
         }
         if activeMode == .automatic, let autoCapture {
-            stopHoverMonitor()
             phase = .finishing
             hudState.phase = .finishing
             hudViewModel?.update(hudState)
@@ -309,7 +298,6 @@ final class ScrollingCaptureCoordinator {
         }
 
         if activeMode == .automatic, let autoCapture {
-            stopHoverMonitor()
             autoCapture.cancel()
             return
         }
@@ -330,9 +318,8 @@ final class ScrollingCaptureCoordinator {
         if activeMode == .automatic, let captureID = activeCaptureID {
             switch phase {
             case .capturing, .paused:
-                // Toggles only the user's own intent; the effective paused
-                // state combines this with the current hover state so leaving
-                // the area can never silently clear an explicit pause.
+                // Automatic capture is paused only by this explicit user
+                // intent, never by pointer position.
                 isUserPausedAuto.toggle()
                 syncAutoPauseState(captureID: captureID)
             default:
@@ -420,11 +407,10 @@ final class ScrollingCaptureCoordinator {
         if phase == .paused {
             // A decision can rarely still be in flight just as a pause takes
             // effect. The reducer resets pause-related fields unconditionally,
-            // so restore them here rather than showing a momentarily wrong
-            // Pause/Resume label or hover message.
+            // so restore the explicit pause state here.
             hudState.phase = .paused
             hudState.isUserPaused = isUserPausedAuto
-            hudState.isAwaitingHover = !isUserPausedAuto && !isHoveringSelectedRegion
+            hudState.isAwaitingHover = false
         }
         hudViewModel?.update(hudState)
     }
@@ -434,7 +420,6 @@ final class ScrollingCaptureCoordinator {
         captureID: UUID
     ) {
         guard activeCaptureID == captureID else { return }
-        stopHoverMonitor()
         switch result {
         case let .success(image?):
             do {
@@ -539,7 +524,6 @@ final class ScrollingCaptureCoordinator {
     }
 
     private func reset() {
-        stopHoverMonitor()
         hudPresenter.dismiss()
         phase = .idle
         activeCaptureID = nil
@@ -552,47 +536,10 @@ final class ScrollingCaptureCoordinator {
         hudState = .starting
         consecutiveRejections = 0
         isUserPausedAuto = false
-        isHoveringSelectedRegion = true
     }
 
-    // MARK: - Automatic-mode hover gating
-
-    /// Starts polling the cursor position against the selected area. Automatic
-    /// scrolling only actually advances while hovering inside it; leaving pauses
-    /// it immediately and returning resumes it, unless the user has also
-    /// explicitly pressed Pause.
-    private func startHoverMonitor(selectedRegion: CGRect, captureID: UUID) {
-        hoverMonitorTask?.cancel()
-        isUserPausedAuto = false
-        isHoveringSelectedRegion = selectedRegion.contains(mouseLocationProvider())
-        syncAutoPauseState(captureID: captureID)
-
-        hoverMonitorTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: self.hoverPollInterval)
-                if Task.isCancelled { return }
-                self.pollHoverState(selectedRegion: selectedRegion, captureID: captureID)
-            }
-        }
-    }
-
-    private func pollHoverState(selectedRegion: CGRect, captureID: UUID) {
-        guard activeCaptureID == captureID, activeMode == .automatic else { return }
-        let isHovering = selectedRegion.contains(mouseLocationProvider())
-        guard isHovering != isHoveringSelectedRegion else { return }
-        isHoveringSelectedRegion = isHovering
-        syncAutoPauseState(captureID: captureID)
-    }
-
-    private func stopHoverMonitor() {
-        hoverMonitorTask?.cancel()
-        hoverMonitorTask = nil
-    }
-
-    /// Combines the user's own Pause intent with the current hover state into
-    /// the single paused/running signal the auto-capture controller receives,
-    /// and keeps the HUD's phase and messaging in sync with the reason.
+    /// Propagates the user's explicit pause choice to the auto-capture
+    /// controller and HUD. This intentionally has no pointer/hover input.
     private func syncAutoPauseState(captureID: UUID) {
         guard activeCaptureID == captureID,
               activeMode == .automatic,
@@ -602,12 +549,11 @@ final class ScrollingCaptureCoordinator {
             return
         }
 
-        let isEffectivelyPaused = isUserPausedAuto || !isHoveringSelectedRegion
-        autoCapture.setPaused(isEffectivelyPaused)
-        phase = isEffectivelyPaused ? .paused : .capturing
-        hudState.phase = isEffectivelyPaused ? .paused : .capturing
+        autoCapture.setPaused(isUserPausedAuto)
+        phase = isUserPausedAuto ? .paused : .capturing
+        hudState.phase = isUserPausedAuto ? .paused : .capturing
         hudState.isUserPaused = isUserPausedAuto
-        hudState.isAwaitingHover = isEffectivelyPaused && !isUserPausedAuto
+        hudState.isAwaitingHover = false
         hudViewModel?.update(hudState)
     }
 }

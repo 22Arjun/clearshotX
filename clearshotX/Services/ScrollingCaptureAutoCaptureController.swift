@@ -22,7 +22,11 @@ nonisolated struct ScrollingCaptureAutoCaptureConfiguration: Equatable, Sendable
     /// Keeps each accepted page position visible long enough to inspect before
     /// the next automatic move begins.
     var readableStepPause: Duration = .milliseconds(170)
+    /// Number of fresh frames evaluated at the same post-scroll position before
+    /// declaring a viewport unregistrable. Retrying the image is safe; moving
+    /// the document backwards and forwards is not.
     var maximumRetries = 5
+    var alignmentRecoveryDelay: Duration = .milliseconds(70)
     var initialSettleDelay: Duration = .milliseconds(90)
     var settleProbeDelay: Duration = .milliseconds(24)
     var maximumSettleProbes = 5
@@ -95,8 +99,8 @@ nonisolated protocol ScrollingCaptureAutoCapturing: AnyObject, Sendable {
 }
 
 /// Owns the deterministic capture loop: scroll, settle, capture, register, append.
-/// No user scroll cadence enters the algorithm. Low-confidence motion is undone
-/// before a smaller delta is attempted, so a retry can never leave a document gap.
+/// No user scroll cadence enters the algorithm. An ambiguous viewport is sampled
+/// again in place; the controller never scrolls backwards to retry alignment.
 nonisolated final class ScrollingCaptureAutoCaptureController:
     ScrollingCaptureAutoCapturing,
     @unchecked Sendable
@@ -328,9 +332,18 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
                 try await Task.sleep(for: autoConfiguration.readableStepPause)
 
             case .retryWithSmallerScrollDelta:
-                // captureReliableStep exhausts retries before returning this case.
+                // The current position was sampled repeatedly without a credible
+                // overlap. Keep the fully verified prefix instead of moving the
+                // page backwards or showing an error after a long capture.
                 rejectedFrames += 1
-                throw ScrollingCaptureAutoCaptureError.unreliableAlignment
+                progress = makeProgress(
+                    compositor: compositor,
+                    acceptedFrames: acceptedFrames,
+                    rejectedFrames: rejectedFrames,
+                    lastAlignment: lastAlignment
+                )
+                onProgress(.rejected(.insufficientOverlap, progress))
+                return try compositor.makeImage()
             }
         }
 
@@ -342,17 +355,21 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
         initialDelta: Int,
         location: CGPoint
     ) async throws -> StepResult? {
-        var delta = initialDelta
         var best: StepResult?
+
+        // Advance exactly once. A low-confidence alignment is normally a frame
+        // that was captured during redraw/hover animation rather than proof the
+        // page needs to move in the opposite direction. Re-sample the unchanged
+        // viewport instead of visibly bouncing it up and down.
+        guard try await driveSmoothScroll(
+            verticalDelta: initialDelta,
+            at: location
+        ) else {
+            return nil
+        }
 
         for attempt in 0..<max(1, autoConfiguration.maximumRetries) {
             try Task.checkCancellation()
-            guard try await driveSmoothScroll(
-                verticalDelta: delta,
-                at: location
-            ) else {
-                return nil
-            }
             let candidate = try await captureSettledFrame()
             if currentControl().shouldFinish { return nil }
             let match = try stitchEngine.match(previous: previous, current: candidate)
@@ -364,22 +381,9 @@ nonisolated final class ScrollingCaptureAutoCaptureController:
             if best == nil || match.correlation > best!.match.correlation {
                 best = result
             }
-            guard attempt + 1 < autoConfiguration.maximumRetries,
-                  delta / 2 >= autoConfiguration.minimumStepPoints else {
-                break
+            if attempt + 1 < autoConfiguration.maximumRetries {
+                try await Task.sleep(for: autoConfiguration.alignmentRecoveryDelay)
             }
-
-            // Undo the rejected step before retrying. Waiting for that rollback to
-            // settle preserves the previous frame as the exact registration base.
-            guard try await driveSmoothScroll(
-                verticalDelta: -delta,
-                at: location
-            ) else {
-                return nil
-            }
-            _ = try await captureSettledFrame()
-            if currentControl().shouldFinish { return nil }
-            delta /= 2
         }
         if let best { return best }
         return StepResult(
