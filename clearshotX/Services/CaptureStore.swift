@@ -13,7 +13,10 @@ import UniformTypeIdentifiers
 
 protocol CaptureStoring: AnyObject {
     func store(_ image: CGImage) throws -> StoredCapture
-    func removeCapture(at url: URL, dragFileURL: URL?) throws
+    /// Nonisolated so callers can run it off the main actor — deleting a
+    /// capture from a synced folder (e.g. iCloud Drive) can block on file
+    /// coordination, and that must never freeze the app's UI thread.
+    nonisolated func removeCapture(at url: URL, dragFileURL: URL?) throws
     func removeExpiredCaptures() throws
 }
 
@@ -80,8 +83,12 @@ nonisolated enum CapturePNGEncoder {
 }
 
 final class CaptureStore: CaptureStoring {
-    private let fileManager: FileManager
-    private let preferences: CaptureSavePreferences
+    // `FileManager` isn't `Sendable` in the SDK, but per Apple's docs a
+    // `FileManager` instance is safe to use concurrently from multiple
+    // threads, so `nonisolated(unsafe)` here is a deliberate, verified
+    // exception rather than a bypass of a real data race.
+    private nonisolated(unsafe) let fileManager: FileManager
+    private nonisolated let preferences: CaptureSavePreferences
     private let retentionInterval: TimeInterval
     private let isCleanupEnabled: () -> Bool
     private let now: () -> Date
@@ -145,7 +152,7 @@ final class CaptureStore: CaptureStoring {
         }
     }
 
-    func removeCapture(at url: URL, dragFileURL: URL? = nil) throws {
+    nonisolated func removeCapture(at url: URL, dragFileURL: URL? = nil) throws {
         try removeStoredCapture(at: url)
 
         guard let dragFileURL,
@@ -158,7 +165,7 @@ final class CaptureStore: CaptureStoring {
         try? fileManager.removeItem(at: dragFileURL.deletingLastPathComponent())
     }
 
-    private func removeStoredCapture(at url: URL) throws {
+    private nonisolated func removeStoredCapture(at url: URL) throws {
         var folderAccessError: Error?
 
         do {
@@ -193,7 +200,7 @@ final class CaptureStore: CaptureStoring {
         throw CaptureStoreError.captureFileNotFound
     }
 
-    private func removeFileIfPresent(at url: URL) throws -> Bool {
+    private nonisolated func removeFileIfPresent(at url: URL) throws -> Bool {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         defer {
             if didStartAccessing {

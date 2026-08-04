@@ -72,7 +72,12 @@ enum CaptureExportError: LocalizedError {
     }
 }
 
-final class CaptureSavePreferences {
+/// Thin wrapper over `UserDefaults` and security-scoped bookmark resolution.
+/// Deliberately `nonisolated`: `CaptureStore` calls this from a background
+/// task when deleting captures so a slow file-provider (e.g. iCloud Drive
+/// syncing `~/Documents`) can't block the main thread. Neither UserDefaults
+/// nor bookmark resolution require the main actor.
+nonisolated final class CaptureSavePreferences {
     private enum Key {
         static let mode = "captureSaveMode"
         static let defaultFolderBookmark = "captureDefaultFolderBookmark"

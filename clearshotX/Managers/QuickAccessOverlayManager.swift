@@ -304,17 +304,33 @@ final class QuickAccessOverlayManager {
     }
 
     private func delete(_ capture: CaptureResult) {
-        do {
-            try captureStore.removeCapture(
-                at: capture.fileURL,
-                dragFileURL: capture.dragFileURL
-            )
-        } catch {
-            NSSound.beep()
-            return
-        }
+        // Deleting can block on file coordination (e.g. a scrolling capture
+        // still uploading to an iCloud Drive-synced save folder), so this
+        // must never run on the main actor — otherwise the whole app hangs
+        // until the file provider catches up. captureStore.removeCapture is
+        // `nonisolated`, letting it run on a background thread here.
+        dismissWorkItem?.cancel()
+        dismissWorkItem = nil
 
-        dismiss(animated: false)
+        let captureStore = captureStore
+        let fileURL = capture.fileURL
+        let dragFileURL = capture.dragFileURL
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                try captureStore.removeCapture(at: fileURL, dragFileURL: dragFileURL)
+            } catch {
+                await MainActor.run {
+                    NSSound.beep()
+                }
+                return
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self, self.currentCapture?.fileURL == fileURL else { return }
+                self.dismiss(animated: false)
+            }
+        }
     }
 
     private func presentSaveError(_ error: CaptureExportError) {

@@ -236,7 +236,20 @@ nonisolated final class ScrollingCaptureCGEventScrollDriver:
     ScrollingCaptureScrollDriving,
     @unchecked Sendable
 {
-    private let eventSource = CGEventSource(stateID: .combinedSessionState)
+    private let eventSource: CGEventSource? = {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        // Quartz otherwise suppresses local keyboard/mouse hardware for up to
+        // 250 ms after a synthetic event. Smooth Auto Scroll posts a pulse every
+        // 16 ms, which continuously renews that window and makes the physical
+        // pointer appear frozen. This setting affects only events from this
+        // source and leaves the browser-targeted HID delivery intact.
+        source?.localEventsSuppressionInterval = 0
+        source?.setLocalEventsFilterDuringSuppressionState(
+            [.permitLocalMouseEvents, .permitLocalKeyboardEvents],
+            state: .eventSuppressionStateSuppressionInterval
+        )
+        return source
+    }()
 
     func scroll(verticalDelta: Int, at appKitPoint: CGPoint) throws {
         guard verticalDelta != 0 else { return }
